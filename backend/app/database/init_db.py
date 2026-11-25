@@ -1,6 +1,6 @@
 import json
 from app.database.connection import engine, Base, SessionLocal
-from app.database.models import Patient, Device, ExerciseConfiguration, ModelMetadata, RehabilitationSession
+from app.database.models import Patient, Device, ExerciseConfiguration, RehabilitationSession
 import datetime
 
 DEFAULT_EXERCISES = [
@@ -207,18 +207,5 @@ def init_db():
                 db.add(RehabilitationSession(**s))
             db.commit()
 
-        # Check candidate ML model metadata entry
-        model_meta = db.query(ModelMetadata).first()
-        if not model_meta:
-            meta = ModelMetadata(
-                model_name="FrozenShoulder-MovementQuality-Candidate",
-                version="v0.1-candidate",
-                model_type="RandomForest",
-                available_classes="Normal,Restricted,Irregular",
-                is_active=False,
-                validation_status="Pending clinical cohort data collection - unvalidated prototype"
-            )
-            db.add(meta)
-            db.commit()
     finally:
         db.close()

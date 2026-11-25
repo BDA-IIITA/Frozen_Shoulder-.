@@ -1,23 +1,50 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { AffectedSide, DataSourceMode } from '../../types';
 
 interface ArmVisualizationProps {
-  angle: number;           // Current primary elevation angle in degrees (0 to 180)
-  maxAngle: number;        // Session max angle
+  angleLabel?: string;
+  movementPreview?: boolean;
+  waitingMessage?: string;
+  angle: number | null;           // Current primary elevation angle in degrees (0 to 180)
+  maxAngle: number | null;        // Session max angle
   exerciseKey: string;     // flexion, abduction, external_rotation, internal_rotation
   affectedSide: AffectedSide;
   dataSource: DataSourceMode;
 }
 
 export const ArmVisualization: React.FC<ArmVisualizationProps> = ({
+  angleLabel = "Current Angle",
+  movementPreview = false,
+  waitingMessage = 'Waiting for a fresh chest and wrist orientation pair.',
   angle,
   maxAngle,
   exerciseKey,
   affectedSide,
   dataSource,
 }) => {
-  // Clamp angle safely
-  const clampedAngle = Math.max(0, Math.min(170, angle));
+  const [visualAngle, setVisualAngle] = useState(angle ?? 0);
+  const previous = useRef(angle ?? 0);
+  useEffect(() => {
+    const target = angle ?? 0;
+    if (angle == null || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      previous.current = target;
+      setVisualAngle(target);
+      return;
+    }
+    const initial = previous.current;
+    let frame = 0;
+    let started: number | null = null;
+    const animate = (time: number) => {
+      started ??= time;
+      const progress = Math.min(1, (time - started) / 180);
+      previous.current = initial + (target - initial) * (1 - (1 - progress) ** 2);
+      setVisualAngle(previous.current);
+      if (progress < 1) frame = requestAnimationFrame(animate);
+    };
+    frame = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(frame);
+  }, [angle]);
+  const clampedAngle = Math.max(0, Math.min(180, visualAngle));
   const isRight = affectedSide === 'right';
 
   // Glenohumeral joint pivot coordinates
@@ -56,26 +83,25 @@ export const ArmVisualization: React.FC<ArmVisualizationProps> = ({
     handY = elbowY + Math.cos(angleRad) * forearmLength;
   }
 
-  // IMU sensor location on mid upper-arm
-  const imuArmX = (pivotX + elbowX) / 2;
-  const imuArmY = (pivotY + elbowY) / 2;
+  const imuArmX = dataSource === 'live' ? handX : (pivotX + elbowX) / 2;
+  const imuArmY = dataSource === 'live' ? handY : (pivotY + elbowY) / 2;
 
   return (
     <div className="flex flex-col items-center justify-between h-full bg-slate-900 rounded-xl p-4 text-white relative shadow-sm border border-slate-800">
       {/* Header Info */}
       <div className="w-full flex items-center justify-between text-xs text-slate-400 pb-2 border-b border-slate-800">
         <div className="flex items-center space-x-2">
-          <span className="inline-block w-2 h-2 rounded-full bg-teal-400 animate-pulse"></span>
-          <span className="font-medium text-slate-200">Biomechanical Model</span>
+          <span className="inline-block w-2 h-2 rounded-full bg-teal-400 "></span>
+          <span className="font-medium text-slate-200">Arm movement</span>
         </div>
         <span className="bg-slate-800 px-2 py-0.5 rounded text-[11px] font-mono text-teal-300">
-          {dataSource.toUpperCase()} STREAM
+          {angle == null ? 'Waiting' : dataSource !== 'live' ? 'Synthetic' : movementPreview ? 'Wrist preview' : 'Live'}
         </span>
       </div>
 
       {/* SVG Upper Body Rig */}
       <div className="w-full flex justify-center py-2">
-        <svg viewBox="0 0 300 320" className="w-64 h-64 overflow-visible">
+        <svg viewBox="-84 0 468 320" className="h-48 w-full max-w-lg overflow-visible sm:h-60">
           <defs>
             <linearGradient id="torsoGrad" x1="0%" y1="0%" x2="0%" y2="100%">
               <stop offset="0%" stopColor="#334155" />
@@ -163,7 +189,7 @@ export const ArmVisualization: React.FC<ArmVisualizationProps> = ({
           {/* Elbow Joint */}
           <circle cx={elbowX} cy={elbowY} r="6" fill="#0f766e" stroke="#5eead4" strokeWidth="1.5" />
 
-          {/* Upper Arm IMU Sensor #2 */}
+          {/* Limb IMU Sensor #2 */}
           <circle cx={imuArmX} cy={imuArmY} r="7" fill="#f59e0b" stroke="#fcd34d" strokeWidth="1.5" />
           <text x={imuArmX + 12} y={imuArmY + 3} fill="#fcd34d" fontSize="9" fontWeight="bold">
             IMU 2
@@ -185,25 +211,17 @@ export const ArmVisualization: React.FC<ArmVisualizationProps> = ({
       {/* Numerical Angle Readout Footer */}
       <div className="w-full bg-slate-800/80 rounded-lg p-2.5 flex items-center justify-around border border-slate-700">
         <div className="text-center">
-          <div className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">Current Angle</div>
-          <div className="text-xl font-bold text-teal-400">{clampedAngle.toFixed(1)}°</div>
+          <div className="text-xs font-medium text-slate-300">{angleLabel}</div>
+          <div className="text-xl font-bold text-teal-400">{angle == null ? '—' : `${angle.toFixed(1)}°`}</div>
         </div>
-        <div className="h-6 w-px bg-slate-700" />
-        <div className="text-center">
-          <div className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">Peak Angle</div>
-          <div className="text-xl font-bold text-amber-400">{maxAngle.toFixed(1)}°</div>
-        </div>
-        <div className="h-6 w-px bg-slate-700" />
-        <div className="text-center">
-          <div className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">Affected Side</div>
-          <div className="text-sm font-semibold text-slate-200 capitalize">{affectedSide}</div>
-        </div>
+        {maxAngle != null && <div className="text-center">
+          <div className="text-xs text-slate-300">Peak</div>
+          <div className="text-xl font-semibold text-amber-400">{maxAngle.toFixed(1)}°</div>
+        </div>}
       </div>
-
-      {/* Mandatory Disclaimer */}
-      <div className="text-[10px] text-slate-500 text-center mt-2 px-2 leading-tight">
-        * Illustrative kinematic visual model based on orientation vectors. Not a 3D medical anatomy simulation.
-      </div>
+      {(angle == null || movementPreview) && <p className="mt-2 text-center text-xs text-slate-300">
+        {angle == null ? waitingMessage : 'Wrist preview includes twist.'}
+      </p>}
     </div>
   );
 };

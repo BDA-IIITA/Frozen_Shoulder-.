@@ -3,6 +3,7 @@ import json
 import asyncio
 from app.services.sensor.ingestion import sensor_ingestion_service
 from app.core.logger import get_logger
+from app.schemas.sensor import SensorPacket
 
 logger = get_logger("WebSocketManager")
 ws_router = APIRouter()
@@ -44,8 +45,10 @@ async def websocket_live_endpoint(websocket: WebSocket):
                         await websocket.send_text(json.dumps({"type": "PONG", "timestamp": parsed.get("timestamp")}))
                     elif msg_type == "SENSOR_PACKET":
                         # Direct WebSocket ingestion from an ESP32 or client bridge
-                        packet_data = parsed.get("data", {})
-                        processed = sensor_ingestion_service.process_packet(packet_data)
+                        packet = SensorPacket.model_validate(parsed.get("data", {}))
+                        sensor_ingestion_service.process_packet(packet.model_dump())
+                except WebSocketDisconnect:
+                    raise
                 except Exception as e:
                     logger.warning(f"Error handling WebSocket client message: {e}")
 

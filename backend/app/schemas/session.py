@@ -1,16 +1,23 @@
-from pydantic import BaseModel, Field
-from typing import Optional, List
+from pydantic import BaseModel, ConfigDict, Field
+from typing import Any, Literal, Optional
 import datetime
 
 class StartSessionRequest(BaseModel):
     patient_id: int = 1
     exercise_key: str = "flexion"
-    affected_side: str = "right"
-    data_source: str = Field("demo", description="'demo' or 'live'")
+    affected_side: Literal["left", "right"] = "right"
+    data_source: Literal["demo", "live", "replay"] = "demo"
+    recording_id: str | None = None
+    rep_peak_deg: float | None = Field(None, ge=5, le=120, allow_inf_nan=False)
+    prescribed_repetitions: int | None = Field(None, ge=1, le=500)
+    prescribed_angle_deg: float | None = Field(None, gt=0, le=180, allow_inf_nan=False)
+    playback_speed: Literal[1, 2, 4] = 1
 
 class FinishSessionRequest(BaseModel):
     notes: Optional[str] = None
     save_samples: bool = True
+    pain_rating: int | None = Field(None, ge=0, le=10)
+    stiffness_rating: int | None = Field(None, ge=0, le=10)
 
 class SessionSampleDTO(BaseModel):
     timestamp: float
@@ -43,12 +50,13 @@ class RehabilitationSessionResponse(BaseModel):
     ml_model_info: Optional[str] = None
     notes: Optional[str] = None
     warnings: Optional[str] = None
+    movement_analytics: Optional[dict[str, Any]] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class SessionSummaryDTO(BaseModel):
     session: RehabilitationSessionResponse
     exercise_name: str
     improvement_vs_previous_rom: Optional[float] = None
     previous_session_id: Optional[int] = None
+    movement_changes: Optional[dict[str, float]] = None

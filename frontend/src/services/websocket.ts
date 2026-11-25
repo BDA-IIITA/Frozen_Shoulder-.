@@ -1,4 +1,5 @@
 import { LiveSensorSample, DeviceStatus } from '../types';
+import { backendOrigin } from './api';
 
 type MessageHandler = (sample: LiveSensorSample) => void;
 type StatusHandler = (status: DeviceStatus) => void;
@@ -17,9 +18,7 @@ class SensorWebSocketClient {
     }
 
     this.isConnecting = true;
-    const backendHost = (typeof window !== 'undefined' && window.location.hostname) ? window.location.hostname : 'localhost';
-    const protocol = (typeof window !== 'undefined' && window.location.protocol === 'https:') ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${backendHost}:8000/ws/live`;
+    const wsUrl = `${backendOrigin.replace(/^http/, 'ws')}/ws/live`;
 
     try {
       this.socket = new WebSocket(wsUrl);

@@ -21,12 +21,15 @@ class RepetitionCounter:
     ):
         self.threshold_up = threshold_up
         self.threshold_down = threshold_down
+        self.adaptive_return = False
         self.min_rep_duration = min_rep_duration
         self.exercise_key = exercise_key
 
         # State tracking
         self.state: str = "REST"
         self.rep_count: int = 0
+        self.rest_seen = False
+        self.rest_angle = None
         self.current_rep_start_time: Optional[float] = None
         self.current_rep_peak_angle: float = 0.0
         self.current_rep_min_angle: float = 999.0
@@ -39,14 +42,33 @@ class RepetitionCounter:
         self.completed_reps_info: List[Dict[str, float]] = []
 
     def reset(self):
-        self.state = "REST"
+        self.reset_partial()
         self.rep_count = 0
-        self.current_rep_start_time = None
-        self.current_rep_peak_angle = 0.0
-        self.current_rep_min_angle = 999.0
         self.session_min_angle = 999.0
         self.session_max_angle = 0.0
         self.completed_reps_info.clear()
+
+    def reset_partial(self):
+        self.state = "REST"
+        self.rest_seen = False
+        self.rest_angle = None
+        self.current_rep_start_time = None
+        self.current_rep_peak_angle = 0.0
+        self.current_rep_min_angle = 999.0
+
+    @property
+    def ascent_floor(self):
+        return max(self.threshold_down, self.rest_angle) if self.adaptive_return and self.rest_angle is not None else self.threshold_down
+
+    @property
+    def required_peak(self):
+        return self.threshold_up + max(0., self.ascent_floor - self.threshold_down)
+
+    @property
+    def return_limit(self):
+        if not self.adaptive_return:
+            return self.threshold_down
+        return max(self.ascent_floor, self.current_rep_peak_angle / 3)
 
     def process_sample(self, angle: float, timestamp: float) -> Dict[str, Any]:
         """
@@ -63,7 +85,11 @@ class RepetitionCounter:
 
         # State Machine Transitions
         if self.state == "REST":
-            if angle > self.threshold_down + 2.0:
+            if angle <= self.threshold_down:
+                self.rest_seen = True
+            if self.rest_seen:
+                self.rest_angle = angle if self.rest_angle is None else min(angle, self.rest_angle)
+            if self.rest_seen and angle > self.ascent_floor + 2.0:
                 self.state = "ASCENT"
                 self.current_rep_start_time = timestamp
                 self.current_rep_peak_angle = angle
@@ -72,33 +98,38 @@ class RepetitionCounter:
         elif self.state == "ASCENT":
             if angle > self.current_rep_peak_angle:
                 self.current_rep_peak_angle = angle
-            
-            # If angle crosses threshold_up and starts declining by hysteresis amount (3 degrees)
-            if angle >= self.threshold_up and (self.current_rep_peak_angle - angle) > 3.0:
+
+            if angle <= self.ascent_floor and self.current_rep_peak_angle < self.required_peak:
+                self.reset_partial()
+                self.rest_seen = True
+                self.rest_angle = angle
+            # A return below the lower threshold also confirms descent on sparse streams.
+            elif self.current_rep_peak_angle >= self.required_peak and (angle <= self.return_limit or self.current_rep_peak_angle - angle > 3.0):
                 self.state = "DESCENT"
 
-        elif self.state == "DESCENT":
+        if self.state == "DESCENT":
             # If it continues dropping back down to threshold_down
-            if angle <= self.threshold_down:
-                rep_duration = (timestamp - self.current_rep_start_time) if self.current_rep_start_time else 0.0
+            if angle <= self.return_limit:
+                rep_duration = (timestamp - self.current_rep_start_time) if self.current_rep_start_time is not None else 0.0
                 
                 # Check minimum duration constraint to reject fast false twitches
-                if rep_duration >= self.min_rep_duration and self.current_rep_peak_angle >= self.threshold_up:
+                if rep_duration >= self.min_rep_duration and self.current_rep_peak_angle >= self.required_peak:
                     self.rep_count += 1
                     rep_just_completed = True
                     self.completed_reps_info.append({
                         "rep_number": self.rep_count,
                         "duration": round(rep_duration, 2),
                         "peak_angle": round(self.current_rep_peak_angle, 1),
+                        "excursion_deg": round(max(0., self.current_rep_peak_angle - self.rest_angle), 1),
                         "min_angle": round(self.current_rep_min_angle if self.current_rep_min_angle < 900 else angle, 1),
                         "timestamp": timestamp
                     })
                 
                 # Return to REST
-                self.state = "REST"
-                self.current_rep_start_time = None
-                self.current_rep_peak_angle = 0.0
-                self.current_rep_min_angle = 999.0
+                self.reset_partial()
+                self.rest_seen = angle <= self.threshold_down or (self.adaptive_return and rep_just_completed)
+                if self.rest_seen:
+                    self.rest_angle = angle
             elif angle > self.current_rep_peak_angle:
                 # User pushed higher during descent
                 self.current_rep_peak_angle = angle

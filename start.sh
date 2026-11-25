@@ -30,7 +30,9 @@ trap cleanup SIGINT SIGTERM
 # 1. Start Backend (FastAPI on Port 8000)
 echo "[1/2] Starting FastAPI backend on http://0.0.0.0:8000..."
 cd "$DIR/backend"
-if [ -f "venv/bin/python3" ]; then
+if [ -f "$DIR/.venv/bin/python3" ]; then
+    "$DIR/.venv/bin/python3" run.py &
+elif [ -f "venv/bin/python3" ]; then
     ./venv/bin/python3 run.py &
 else
     python3 run.py &

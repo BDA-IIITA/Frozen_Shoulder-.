@@ -1,28 +1,37 @@
-from pydantic import BaseModel, Field, field_validator
-from typing import Dict, Optional, Literal
+from typing import Dict, Literal, Optional
+
+from pydantic import BaseModel, Field, FiniteFloat, model_validator
+
 
 class QuaternionModel(BaseModel):
-    x: float = Field(0.0, description="Quaternion X component")
-    y: float = Field(0.0, description="Quaternion Y component")
-    z: float = Field(0.0, description="Quaternion Z component")
-    w: float = Field(1.0, description="Quaternion W component")
+    x: FiniteFloat
+    y: FiniteFloat
+    z: FiniteFloat
+    w: FiniteFloat
 
-    @field_validator("w")
-    def validate_non_zero(cls, v, values):
-        # Full validation happens in quaternion normalizer
-        return v
+    @model_validator(mode="after")
+    def validate_norm(self):
+        from math import hypot
+
+        if not 1e-6 <= hypot(self.x, self.y, self.z, self.w) <= 2:
+            raise ValueError("Invalid orientation quaternion norm")
+        return self
+
 
 class SensorData(BaseModel):
-    quaternion: QuaternionModel
-    accelerometer: Optional[Dict[str, float]] = None
-    gyroscope: Optional[Dict[str, float]] = None
+    quaternion: Optional[QuaternionModel] = None
+    sample_timestamp: Optional[FiniteFloat] = Field(None, ge=0, description="Per-sensor sample time in seconds on the packet device clock")
+    accelerometer: Optional[Dict[str, FiniteFloat]] = None
+    gyroscope: Optional[Dict[str, FiniteFloat]] = None
     calibration_status: Optional[int] = Field(None, description="BNO086 calibration status 0-3")
 
+
 class SensorPacket(BaseModel):
-    timestamp: float = Field(..., description="UNIX epoch timestamp in seconds")
-    device_id: str = Field("esp32-shoulder-01", description="Identifier of the transmitting ESP32")
-    source: Literal["live", "demo"] = Field("live", description="Origin of packet: live hardware or demo generator")
-    sensors: Dict[str, SensorData] = Field(..., description="Mapping of sensor locations: chest, upper_arm, etc.")
+    timestamp: FiniteFloat = Field(..., ge=0, description="Device sample time in seconds")
+    device_id: str = Field("esp32-shoulder-01", min_length=1, max_length=64)
+    source: Literal["live", "demo"] = "live"
+    sensors: Dict[str, SensorData]
+
 
 class ProcessedAngleOutput(BaseModel):
     timestamp: float
@@ -42,4 +51,4 @@ class ProcessedAngleOutput(BaseModel):
     state: str
     quality_flag: str
     q_relative: list[float]
-    warnings: list[str] = []
+    warnings: list[str] = Field(default_factory=list)

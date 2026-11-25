@@ -11,6 +11,11 @@ class ROMProgressItem(BaseModel):
     min_angle: float
     repetitions: int
     data_source: str
+    affected_side: str
+    session_number: int
+    duration_seconds: float
+    movement_analytics: Optional[Dict[str, Any]] = None
+    rehab_progress: Optional[Dict[str, Any]] = None
 
 class WeeklyActivityItem(BaseModel):
     day: str

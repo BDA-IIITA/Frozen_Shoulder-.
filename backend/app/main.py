@@ -7,6 +7,7 @@ from app.core.logger import get_logger
 from app.database.init_db import init_db
 from app.api.routes import router as api_router
 from app.api.websocket import ws_router
+from app.services.sensor.ingestion import sensor_ingestion_service
 
 logger = get_logger("Main")
 
@@ -17,6 +18,8 @@ async def lifespan(app: FastAPI):
     init_db()
     logger.info("Database initialized successfully.")
     yield
+    sensor_ingestion_service.stop_monitoring()
+    sensor_ingestion_service.active_session_id = None
     # Shutdown
     logger.info("ShoulderSense backend shutting down.")
 

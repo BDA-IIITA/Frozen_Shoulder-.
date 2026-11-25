@@ -20,7 +20,7 @@ import { api } from '../services/api';
 
 export const DeviceSettingsPage: React.FC = () => {
   const [deviceStatus, setDeviceStatus] = useState<DeviceStatus | null>(null);
-  const [mode, setMode] = useState<DataSourceMode>('demo');
+  const [mode, setMode] = useState<Exclude<DataSourceMode, "replay">>('demo');
   const [ipAddress, setIpAddress] = useState('192.168.1.105');
   const [copied, setCopied] = useState(false);
   const [isCalibrating, setIsCalibrating] = useState(false);
@@ -31,7 +31,8 @@ export const DeviceSettingsPage: React.FC = () => {
     try {
       const summary = await api.getDashboardSummary(1);
       setDeviceStatus(summary.device_status);
-      setMode(summary.device_status.data_source_mode);
+      const reportedMode = summary.device_status.data_source_mode;
+      if (reportedMode !== "replay") setMode(reportedMode);
     } catch (err) {
       console.error(err);
     } finally {
@@ -45,7 +46,7 @@ export const DeviceSettingsPage: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
-  const handleSwitchMode = async (newMode: DataSourceMode) => {
+  const handleSwitchMode = async (newMode: Exclude<DataSourceMode, "replay">) => {
     setMode(newMode);
     try {
       await api.connectDevice('esp32-shoulder-01', newMode, ipAddress);
@@ -95,20 +96,12 @@ export const DeviceSettingsPage: React.FC = () => {
     <div className="p-4 sm:p-6 lg:p-8 space-y-6 max-w-7xl mx-auto">
       {/* Title */}
       <div>
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900">Device Settings & Hardware Ingestion</h1>
-        <p className="text-xs sm:text-sm text-slate-500 mt-1">
-          ESP32-WROOM-32 wearable hub configuration, BNO086 telemetry, and zero-point neutral calibration
-        </p>
+        <h1 className="text-2xl font-bold tracking-tight text-slate-900">Device Settings</h1>
       </div>
 
       {/* Mode Switch Card */}
       <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h3 className="font-bold text-slate-900 text-sm">Telemetry Data Ingestion Mode</h3>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Switch between the reproducible biological Demo Generator and live physical wearable IMUs
-          </p>
-        </div>
+        <h3 className="font-semibold text-slate-900">Data source</h3>
 
         <div className="flex items-center space-x-2 bg-slate-100 p-1 rounded-lg">
           <button
@@ -149,15 +142,15 @@ export const DeviceSettingsPage: React.FC = () => {
           <div className="flex items-center space-x-1.5 mt-1">
             <span
               className={`w-2 h-2 rounded-full ${
-                deviceStatus?.is_active ? 'bg-teal-500 animate-pulse' : 'bg-slate-400'
+                deviceStatus?.hardware_active ? 'bg-teal-500 animate-pulse' : 'bg-slate-400'
               }`}
             />
             <span className="font-bold text-slate-900 text-base">
-              {deviceStatus?.is_active ? 'Connected' : 'Standby'}
+              {deviceStatus?.hardware_active ? 'Recent ESP32 signal' : 'No recent ESP32 signal'}
             </span>
           </div>
           <span className="text-[11px] text-slate-500 mt-1 block">
-            {deviceStatus?.data_freshness_sec !== null
+            {deviceStatus?.data_freshness_sec != null
               ? `Data age: ${deviceStatus?.data_freshness_sec}s`
               : 'No live stream'}
           </span>
@@ -188,11 +181,9 @@ export const DeviceSettingsPage: React.FC = () => {
       <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-xs space-y-4">
         <div className="flex items-start justify-between">
           <div>
-            <h3 className="text-base font-bold text-slate-900">Neutral Anatomical Calibration</h3>
+            <h3 className="text-base font-bold text-slate-900">Neutral calibration</h3>
             <p className="text-xs text-slate-500 mt-1 max-w-2xl leading-relaxed">
-              Have the participant stand or sit upright with their arm resting naturally at their side. 
-              Clicking Calibrate captures the current relative quaternion as the zero-angle anatomical baseline (0° reference), 
-              offsetting initial sensor placement angles.
+              Rest the arm at the side, then capture the starting position.
             </p>
           </div>
           <button
@@ -218,14 +209,9 @@ export const DeviceSettingsPage: React.FC = () => {
       </div>
 
       {/* Hardware Integration Guide & Payload Schema */}
-      <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-xs space-y-4">
-        <div>
-          <h3 className="text-base font-bold text-slate-900">ESP32 Firmware Transmission Guide</h3>
-          <p className="text-xs text-slate-500 mt-1">
-            Configure the ESP32 firmware to post orientation JSON packets to the backend ingestion endpoint:
-          </p>
-        </div>
-
+      <details className="rounded-xl border border-slate-200 bg-white p-4 sm:p-6">
+        <summary className="cursor-pointer font-semibold">ESP32 setup details</summary>
+        <div className="mt-4 space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
           <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2">
             <div className="font-bold text-slate-800">Local Network Ingestion Endpoints:</div>
@@ -265,7 +251,8 @@ export const DeviceSettingsPage: React.FC = () => {
             {jsonPayloadExample}
           </pre>
         </div>
-      </div>
+        </div>
+      </details>
     </div>
   );
 };

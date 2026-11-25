@@ -68,7 +68,7 @@ Repetition detection is decoupled from noisy threshold crossings using an exerci
 ```
 [ REST ] --(angle > threshold_down + 2°)--> [ ASCENT ]
    ^                                             |
-   |                                    (angle >= threshold_up & delta < -3°)
+   |                                    (peak >= threshold_up & delta < -3°)
    |                                             v
 [ COMPLETED_REP ] <--(angle <= threshold_down)-- [ DESCENT ]
 ```
@@ -80,12 +80,8 @@ Repetition detection is decoupled from noisy threshold crossings using an exerci
 
 ---
 
-## 4. Machine Learning Integration Interface
+## 4. Flexion reference and session analytics
 
-The ML subsystem provides a standardized inference contract:
-- **Input Feature Vector:** `[ROM, Repetitions, Avg_Duration, Duration_Variance, Peak_Variance, Smoothness, Velocity]`
-- **Candidate Models:** Random Forest, Support Vector Machine (SVM), XGBoost.
-- **Model Classes:** `Normal movement`, `Restricted movement`, `Irregular movement`.
-- **Honest Status Reporting:** When no trained cohort model is loaded, the system explicitly returns:
-  `"ML movement assessment is not configured yet."`
-  A separate rule-based demonstration heuristic is provided for UI testing, explicitly disclaimed as non-diagnostic.
+The startup loader reads the locally trained StandardScaler and RBF One-Class SVM pipeline. Both dataset processing and live scoring use the same four-second wrist window contract. The WebSocket publishes movement metrics, model availability, and the latest signed reference score. The session endpoints persist those metrics in a related analytics record. The quaternion pipeline supplies separate estimates of chest motion and limb excursion.
+
+See [SPARS9x flexion monitoring](flexion-pipeline.md) for the feature definitions, evaluation, API fields and limitations.

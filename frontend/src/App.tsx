@@ -8,13 +8,14 @@ import { SessionsPage } from './pages/SessionsPage';
 import { ProgressAnalyticsPage } from './pages/ProgressAnalyticsPage';
 import { ReportsPage } from './pages/ReportsPage';
 import { DeviceSettingsPage } from './pages/DeviceSettingsPage';
-import { NavItemKey, DeviceStatus } from './types';
+import { NavItemKey, DeviceStatus, DataSourceMode } from './types';
 import { api } from './services/api';
 import { wsClient } from './services/websocket';
 
 export const App: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<NavItemKey>('overview');
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [analyticsSource, setAnalyticsSource] = useState<DataSourceMode>("live");
   const [deviceStatus, setDeviceStatus] = useState<DeviceStatus | null>(null);
 
   // Poll / listen to device telemetry status
@@ -48,13 +49,13 @@ export const App: React.FC = () => {
       case 'overview':
         return <OverviewPage onNavigate={(tab) => setCurrentTab(tab)} />;
       case 'monitoring':
-        return <LiveMonitoringPage />;
+        return <LiveMonitoringPage onOpenProgress={(source) => { setAnalyticsSource(source); setCurrentTab('analytics'); }} />;
       case 'exercises':
         return <ExerciseLibraryPage onNavigateToMonitoring={() => setCurrentTab('monitoring')} />;
       case 'sessions':
         return <SessionsPage />;
       case 'analytics':
-        return <ProgressAnalyticsPage />;
+        return <ProgressAnalyticsPage initialSource={analyticsSource} />;
       case 'reports':
         return <ReportsPage />;
       case 'settings':
@@ -65,7 +66,7 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="flex h-screen bg-slate-50 overflow-hidden font-sans">
+    <div className="flex h-dvh bg-slate-50 overflow-hidden font-sans">
       {/* Sidebar Navigation */}
       <Sidebar
         currentTab={currentTab}
@@ -82,7 +83,7 @@ export const App: React.FC = () => {
           onNavigateToSettings={() => setCurrentTab('settings')}
         />
 
-        <main className="flex-1 overflow-y-auto">
+        <main key={currentTab} className="flex-1 overflow-y-auto">
           {renderContent()}
         </main>
       </div>

@@ -1,7 +1,8 @@
 import datetime
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Text, Boolean
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Text, Boolean, JSON
 from sqlalchemy.orm import relationship
 from app.database.connection import Base
+from app.services.analytics.wrist_jerk import coarse_wrist_jerk
 
 class Patient(Base):
     __tablename__ = "patients"
@@ -77,6 +78,16 @@ class RehabilitationSession(Base):
     warnings = Column(Text, nullable=True)  # JSON-encoded array of warnings (e.g. glitches, stales)
     
     patient = relationship("Patient", back_populates="sessions")
+    movement_record = relationship("SessionMovementAnalytics", uselist=False, cascade="all, delete-orphan")
+
+    @property
+    def movement_analytics(self):
+        payload = self.movement_record.payload if self.movement_record else None
+        if (self.data_source == "live" and payload and "coarse_wrist_jerk_rms_m_s3" not in payload
+                and payload.get("wrist_trace") and payload.get("repetition_timeline")):
+            return {**payload, **coarse_wrist_jerk(payload["wrist_trace"], payload["repetition_timeline"])}
+        return payload
+
     samples = relationship("SensorSample", back_populates="session", cascade="all, delete-orphan")
 
 class SensorSample(Base):
@@ -118,3 +129,10 @@ class ModelMetadata(Base):
     is_active = Column(Boolean, default=False)
     validation_status = Column(String(100), default="Unvalidated experimental candidate")
     trained_at = Column(DateTime, nullable=True)
+
+
+class SessionMovementAnalytics(Base):
+    __tablename__ = "session_movement_analytics"
+
+    session_id = Column(Integer, ForeignKey("rehabilitation_sessions.id"), primary_key=True)
+    payload = Column(JSON, nullable=False)

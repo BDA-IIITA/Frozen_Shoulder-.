@@ -1,0 +1,4 @@
+recording_id,start_s,end_s,phase_markers_s,review_signal
+spars9x_s7_0,4,21,4.98 6.57 8.04 9.36 10.74 12.02 13.29 14.45 15.66 16.84 17.98 19.10 20.41,acceleration z troughs and alternating gyro z
+spars9x_s2_5177,4,21,4.8 7.02 9.28 11.33 13.38 15.53 17.55 19.44,acceleration x crests and alternating gyro z
+spars9x_s5_0,8,24,9.5 11.9 14.1 16.4 18.6 20.8 23.0,acceleration x crests and alternating gyro z

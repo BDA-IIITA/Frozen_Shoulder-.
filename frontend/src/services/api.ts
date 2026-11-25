@@ -1,16 +1,18 @@
 import {
-  DashboardSummary,
+  DashboardSummary, DatasetWristReference,
   Exercise,
   SessionRecord,
   ROMProgressItem,
   WeeklyActivityItem,
   SessionComparison,
   PhysiotherapyReport,
-  DeviceStatus
+  ReplayRecording, Participant, MonitoringSnapshot, PlaybackSpeed, ReplayAction,
+  DeviceStatus, HardwareStreamStatus
 } from '../types';
 
 const backendHost = (typeof window !== 'undefined' && window.location.hostname) ? window.location.hostname : 'localhost';
-const API_BASE = `http://${backendHost}:8000/api`;
+export const backendOrigin = (import.meta.env.VITE_BACKEND_ORIGIN || `http://${backendHost}:8000`).replace(/\/$/, '');
+const API_BASE = `${backendOrigin}/api`;
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${url}`, {
@@ -39,6 +41,7 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   // Health
+  getHardwareStream: (side: 'left' | 'right' = 'right') => fetchJson<HardwareStreamStatus>(`/sensor/status?side=${side}`),
   checkHealth: () => fetchJson<{ status: string; sensor_mode: string; is_monitoring: boolean }>('/health'),
 
   // Dashboard
@@ -52,6 +55,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ mode, ip_address }),
     }),
+  captureMotionAxis: (id: string, pose: 'forward' | 'side', side: 'left' | 'right') =>
+    fetchJson<{ status: string }>(`/devices/${encodeURIComponent(id)}/calibrate/axes/${pose}?side=${side}`, { method: 'POST' }),
   disconnectDevice: (id: string) =>
     fetchJson<{ status: string }>(`/devices/${id}/disconnect`, { method: 'POST' }),
   calibrateNeutral: (id: string) =>
@@ -70,24 +75,29 @@ export const api = {
     return fetchJson<SessionRecord[]>(`/sessions?${q.toString()}`);
   },
   getSession: (id: number) => fetchJson<SessionRecord>(`/sessions/${id}`),
-  startSession: (data: { patient_id?: number; exercise_key: string; affected_side: string; data_source: string }) =>
+  getParticipants: () => fetchJson<Participant[]>('/participants'),
+  getActiveMonitoring: () => fetchJson<MonitoringSnapshot | null>('/monitoring/active'),
+  controlReplay: (id: number, action: ReplayAction, speed?: PlaybackSpeed) =>
+    fetchJson<MonitoringSnapshot>(`/sessions/${id}/replay/${action}${speed ? `?speed=${speed}` : ''}`, { method: 'POST' }),
+  getReplayRecordings: () => fetchJson<ReplayRecording[]>("/replay/recordings"),
+  startSession: (data: { patient_id?: number; exercise_key: string; affected_side: string; data_source: string; recording_id?: string; playback_speed?: PlaybackSpeed; rep_peak_deg?: number; prescribed_repetitions?: number; prescribed_angle_deg?: number }) =>
     fetchJson<{ status: string; session_id: number; start_time: string }>('/sessions', {
       method: 'POST',
       body: JSON.stringify(data),
     }),
-  finishSession: (sessionId: number, notes?: string, saveSamples = true) =>
-    fetchJson<{ session: SessionRecord; exercise_name: string; improvement_vs_previous_rom: number | null }>(
+  finishSession: (sessionId: number, notes?: string, saveSamples = true, pain?: number, stiffness?: number) =>
+    fetchJson<{ session: SessionRecord; exercise_name: string; improvement_vs_previous_rom: number | null; movement_changes?: Record<string, number> | null }>(
       `/sessions/${sessionId}/finish`,
       {
         method: 'POST',
-        body: JSON.stringify({ notes, save_samples: saveSamples }),
+        body: JSON.stringify({ notes, save_samples: saveSamples, pain_rating: pain, stiffness_rating: stiffness }),
       }
     ),
   discardSession: (sessionId: number) =>
     fetchJson<{ status: string; message: string }>(`/sessions/${sessionId}`, { method: 'DELETE' }),
-  getSessionSamples: (sessionId: number) =>
+  getSessionSamples: (sessionId: number, signal?: AbortSignal) =>
     fetchJson<Array<{ timestamp: number; flexion_angle: number; abduction_angle: number; angular_velocity: number; quality_flag: string }>>(
-      `/sessions/${sessionId}/samples`
+      `/sessions/${sessionId}/samples`, { signal }
     ),
 
   // Analytics
@@ -96,6 +106,7 @@ export const api = {
     if (exerciseKey) q.set('exercise_key', exerciseKey);
     return fetchJson<ROMProgressItem[]>(`/analytics/rom?${q.toString()}`);
   },
+  getDatasetWristReference: () => fetchJson<DatasetWristReference | null>('/analytics/dataset-reference'),
   getWeeklyActivity: (patientId = 1) =>
     fetchJson<WeeklyActivityItem[]>(`/analytics/weekly?patient_id=${patientId}`),
   compareSessions: (sessionA: number, sessionB: number) =>

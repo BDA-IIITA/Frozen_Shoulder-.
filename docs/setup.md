@@ -10,11 +10,11 @@
 ## 1. Backend Setup
 
 ```bash
-cd backend
+# 1. Create and activate a Python virtual environment at the repository root
+python3 -m venv .venv
+source .venv/bin/activate
 
-# 1. Activate or create Python virtual environment
-python3 -m venv venv
-source venv/bin/activate
+cd backend
 
 # 2. Install dependencies
 pip install -r requirements.txt

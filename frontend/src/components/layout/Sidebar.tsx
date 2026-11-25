@@ -7,7 +7,6 @@ import {
   TrendingUp,
   FileText,
   Cpu,
-  ChevronRight,
   ShieldCheck
 } from 'lucide-react';
 import { NavItemKey } from '../../types';
@@ -27,7 +26,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const navItems = [
     { key: 'overview', label: 'Overview', icon: LayoutDashboard },
-    { key: 'monitoring', label: 'Live Monitoring', icon: Activity, badge: 'Live' },
+    { key: 'monitoring', label: 'Live Monitoring', icon: Activity },
     { key: 'exercises', label: 'Exercise Library', icon: BookOpen },
     { key: 'sessions', label: 'Rehabilitation Sessions', icon: History },
     { key: 'analytics', label: 'Progress Analytics', icon: TrendingUp },
@@ -52,7 +51,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Sidebar Container */}
       <aside
-        className={`fixed lg:static top-0 left-0 z-50 h-screen w-64 bg-white border-r border-slate-200 flex flex-col transition-transform duration-300 ease-in-out ${
+        className={`fixed lg:static top-0 left-0 z-50 h-dvh w-64 bg-white border-r border-slate-200 flex flex-col transition-transform duration-300 ease-in-out ${
           isOpenMobile ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
         }`}
       >
@@ -64,9 +63,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div>
             <div className="font-bold text-slate-900 tracking-tight text-base flex items-center">
               ShoulderSense
-            </div>
-            <div className="text-[10px] text-teal-700 font-medium tracking-wide uppercase">
-              Rehab & Kinematics
             </div>
           </div>
         </div>
@@ -80,9 +76,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <button
                 key={item.key}
                 onClick={() => handleNavClick(item.key as NavItemKey)}
+                aria-current={isActive ? 'page' : undefined}
                 className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
                   isActive
-                    ? 'bg-teal-50 text-teal-900 font-semibold border-l-4 border-teal-600'
+                    ? 'bg-teal-50 text-teal-900 font-semibold'
                     : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
                 }`}
               >
@@ -94,25 +91,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   />
                   <span>{item.label}</span>
                 </div>
-                {item.badge && (
-                  <span className="text-[10px] bg-teal-100 text-teal-800 font-bold px-1.5 py-0.5 rounded uppercase">
-                    {item.badge}
-                  </span>
-                )}
               </button>
             );
           })}
         </nav>
 
-        {/* System & Disclaimer Notice */}
-        <div className="p-4 border-t border-slate-100 bg-slate-50/70 m-3 rounded-lg">
-          <div className="flex items-start space-x-2 text-slate-500 text-xs">
-            <ShieldCheck className="w-4 h-4 text-teal-600 mt-0.5 flex-shrink-0" />
-            <div className="text-[11px] leading-relaxed text-slate-600">
-              <span className="font-semibold text-slate-700">Academic Project:</span> Real-time IMU movement monitoring. Not a medical diagnostic device.
-            </div>
-          </div>
-        </div>
+        <p className="flex items-center gap-2 border-t border-slate-100 px-5 py-4 text-xs text-slate-600" title="Exercise monitoring for academic use">
+          <ShieldCheck className="h-4 w-4 text-teal-700" />Academic prototype
+        </p>
       </aside>
     </>
   );

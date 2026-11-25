@@ -1,715 +1,497 @@
-import React, { useState, useEffect, useRef } from 'react';
-import {
-  Play,
-  Square,
-  Pause,
-  RotateCcw,
-  CheckCircle,
-  AlertTriangle,
-  Cpu,
-  Activity,
-  Flame,
-  Clock,
-  Compass,
-  Repeat,
-  ShieldAlert,
-  Save,
-  Trash2,
-  X
-} from 'lucide-react';
-import {
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  CartesianGrid
-} from 'recharts';
+import { OrientationDiagnostics } from '../components/monitoring/OrientationDiagnostics';
 import { ArmVisualization } from '../components/monitoring/ArmVisualization';
-import {
-  LiveSensorSample,
-  DataSourceMode,
-  AffectedSide,
-  Exercise,
-  SessionRecord
-} from '../types';
+import { useEffect, useRef, useState } from 'react';
+import { CircleCheck, Clock3, Database, Play, Radio, RotateCcw, Pause, Save, Sparkles } from 'lucide-react';
 import { api } from '../services/api';
-import { wsClient } from '../services/websocket';
+import type { DataSourceMode, Exercise, HardwareStreamStatus, MonitoringSnapshot, Participant, PlaybackSpeed, ReplayAction, ReplayRecording } from '../types';
+import { measurement, MovementAnalytics, WristChart } from '../components/monitoring/MovementAnalytics';
+import { formatTime, SessionTimeline } from '../components/monitoring/SessionTimeline';
 
-export const LiveMonitoringPage: React.FC = () => {
-  // Session State
+const sources = [
+  { id: 'replay', label: 'Dataset Replay', icon: Database },
+  { id: 'live', label: 'Live ESP32', icon: Radio },
+  { id: 'demo', label: 'Synthetic Demo', icon: Sparkles },
+] as const;
+const speeds = [1, 2, 4] as const;
+const field = 'mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900';
+const button = 'inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50 disabled:opacity-50';
+const primary = 'inline-flex items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-50';
+
+export function LiveMonitoringPage({ onOpenProgress }: { onOpenProgress?: (source: DataSourceMode) => void }) {
+  const [source, setSource] = useState<DataSourceMode>('replay');
+  const [catalog, setCatalog] = useState<ReplayRecording[]>([]);
   const [exercises, setExercises] = useState<Exercise[]>([]);
-  const [selectedExercise, setSelectedExercise] = useState<string>('flexion');
-  const [affectedSide, setAffectedSide] = useState<AffectedSide>('right');
-  const [dataSource, setDataSource] = useState<DataSourceMode>('demo');
-  
-  const [isSessionActive, setIsSessionActive] = useState(false);
-  const [isPaused, setIsPaused] = useState(false);
-  const [currentSessionId, setCurrentSessionId] = useState<number | null>(null);
-  const [sessionDuration, setSessionDuration] = useState(0);
+  const [patients, setPatients] = useState<Participant[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadErrors, setLoadErrors] = useState<string[]>([]);
+  const [participant, setParticipant] = useState('');
+  const [recordingId, setRecordingId] = useState('');
+  const [patientId, setPatientId] = useState<number>();
+  const [repPeak, setRepPeak] = useState('15');
+  const [exerciseKey, setExerciseKey] = useState('flexion');
+  const [side, setSide] = useState<'left' | 'right'>('right');
+  const [speed, setSpeed] = useState<PlaybackSpeed>(1);
+  const [active, setActive] = useState<MonitoringSnapshot | null>(null);
+  const [saved, setSaved] = useState<Awaited<ReturnType<typeof api.finishSession>> | null>(null);
+  const [error, setError] = useState('');
+  const [connectionError, setConnectionError] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [notes, setNotes] = useState('');
+  const [pain, setPain] = useState('');
+  const [stiffness, setStiffness] = useState('');
+  const [targetReps, setTargetReps] = useState('');
+  const [targetAngle, setTargetAngle] = useState('');
+  const revision = useRef(0);
+  const catalogRevision = useRef(0);
 
-  // Live Telemetry Data
-  const [latestSample, setLatestSample] = useState<LiveSensorSample | null>(null);
-  const [chartData, setChartData] = useState<Array<{ time: string; angle: number; velocity: number }>>([]);
-  const [sessionMaxAngle, setSessionMaxAngle] = useState(0);
-  const [sessionMinAngle, setSessionMinAngle] = useState(0);
-  const [sessionRom, setSessionRom] = useState(0);
-  const [repCount, setRepCount] = useState(0);
-  const [repState, setRepState] = useState<string>('REST');
-
-  // Finish Session Modal
-  const [showFinishModal, setShowFinishModal] = useState(false);
-  const [sessionNotes, setSessionNotes] = useState('');
-  const [finishedSummary, setFinishedSummary] = useState<any | null>(null);
-  const [isSaving, setIsSaving] = useState(false);
-
-  // Calibration alert
-  const [calibrationMsg, setCalibrationMsg] = useState<string | null>(null);
-
-  // Hardware connection tracking
-  const [lastPacketTime, setLastPacketTime] = useState<number | null>(null);
-  const [isHardwareOnline, setIsHardwareOnline] = useState(false);
-
-  const durationTimerRef = useRef<any>(null);
-
-  // Load exercises on mount
   useEffect(() => {
-    api.getExercises().then((list) => {
-      setExercises(list);
-      if (list.length > 0) setSelectedExercise(list[0].exercise_key);
-    }).catch(console.error);
+    setTargetReps('');
+    setTargetAngle('');
+  }, [patientId, side, exerciseKey]);
 
-    // Connect WebSocket
-    wsClient.connect();
+  function loadCatalog() {
+    const version = ++catalogRevision.current;
+    setLoading(true);
+    Promise.allSettled([api.getReplayRecordings(), api.getExercises(), api.getParticipants()] as const)
+      .then(([recordings, availableExercises, people]) => {
+        if (version !== catalogRevision.current) return;
+        const errors = [];
+        if (recordings.status === 'fulfilled') {
+          setCatalog(recordings.value);
+          const first = recordings.value.find(record => record.exercise_key === 'flexion') ?? recordings.value[0];
+          setParticipant(first?.participant ?? '');
+          setRecordingId(first?.id ?? '');
+        } else errors.push('Replay catalog could not be loaded.');
+        if (availableExercises.status === 'fulfilled') setExercises(availableExercises.value);
+        else errors.push('Exercise list could not be loaded.');
+        if (people.status === 'fulfilled') {
+          setPatients(people.value);
+          setPatientId(people.value[0]?.id);
+          setSide(people.value[0]?.affected_side ?? 'right');
+        } else errors.push('Participant list could not be loaded.');
+        setLoadErrors(errors);
+      }).finally(() => { if (version === catalogRevision.current) setLoading(false); });
+  }
 
-    const unsubscribe = wsClient.onSample((sample) => {
-      setLatestSample(sample);
-      setLastPacketTime(Date.now());
-      setIsHardwareOnline(true);
-      setSessionMaxAngle(sample.session_max_angle);
-      setSessionMinAngle(sample.session_min_angle);
-      setSessionRom(sample.session_rom);
-      setRepCount(sample.repetitions);
-      setRepState(sample.state);
-
-      // Append to rolling chart buffer (keep last 60 points)
-      const nowStr = new Date(sample.timestamp * 1000).toLocaleTimeString([], {
-        minute: '2-digit',
-        second: '2-digit',
-      });
-
-      setChartData((prev) => {
-        const next = [...prev, {
-          time: nowStr,
-          angle: sample.primary_angle,
-          velocity: sample.angular_velocity,
-        }];
-        return next.length > 50 ? next.slice(next.length - 50) : next;
-      });
-    });
-
-    return () => {
-      unsubscribe();
-      if (durationTimerRef.current) clearInterval(durationTimerRef.current);
-    };
+  useEffect(() => {
+    loadCatalog();
+    return () => { catalogRevision.current++; };
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    async function poll() {
+      const version = revision.current;
+      try {
+        const snapshot = await api.getActiveMonitoring();
+        if (!cancelled && version === revision.current) {
+          setActive(snapshot);
+          setConnectionError(false);
+        }
+      } catch { if (!cancelled) setConnectionError(true); }
+      if (!cancelled) timer = setTimeout(poll, 350);
+    }
+    poll();
+    return () => { cancelled = true; clearTimeout(timer); };
   }, []);
 
-  // Monitor hardware freshness in live mode (offline if no packets within 3s)
-  useEffect(() => {
-    const timer = setInterval(() => {
-      if (lastPacketTime && (Date.now() - lastPacketTime < 3000)) {
-        setIsHardwareOnline(true);
-      } else {
-        setIsHardwareOnline(false);
+  async function run(action: () => Promise<void>) {
+    revision.current++;
+    setBusy(true);
+    setError('');
+    try { await action(); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : 'The operation could not be completed.'); }
+    finally { revision.current++; setBusy(false); }
+  }
+
+  const mode = active?.source ?? saved?.session.data_source ?? source;
+  const isReplay = mode === 'replay';
+  const record = active?.analytics.recording ?? saved?.session.movement_analytics?.recording ?? catalog.find(item => item.id === recordingId);
+  const metrics = active?.analytics ?? saved?.session.movement_analytics;
+  const repReview = metrics?.repetition_review;
+  const completed = active?.status === 'complete';
+  const elapsed = active?.elapsed_s ?? saved?.session.duration_seconds ?? 0;
+  const duration = isReplay ? record?.duration_s ?? elapsed : elapsed;
+  const exercise = exercises.find(item => item.exercise_key === (active?.exercise_key ?? exerciseKey));
+  const displayName = isReplay ? record?.exercise_name : exercise?.display_name;
+  const patient = patients.find(item => item.id === (active?.patient_id ?? patientId));
+  const displayParticipant = isReplay ? record?.participant.replace('spars9x_', 'SPARS9x ') : patient?.name;
+  const status = active ? { playing: 'Playing', paused: 'Paused', complete: 'Complete', recording: 'Monitoring', stopped: 'Stopped' }[active.status] : saved ? 'Saved' : 'Ready';
+  const currentSpeed = active?.playback_speed ?? speed;
+  const canStart = !!patientId && !!(isReplay ? record : exercise) && !loading;
+
+  function chooseParticipant(value: string) {
+    setSaved(null);
+    setParticipant(value);
+    const items = catalog.filter(item => item.participant === value);
+    setRecordingId((items.find(item => item.exercise_key === 'flexion') ?? items[0])?.id ?? '');
+  }
+
+  function start() {
+    run(async () => {
+      setSaved(null);
+      const peak = Number(repPeak);
+      if (mode === 'live' && (!Number.isFinite(peak) || peak < 5 || peak > 120)) {
+        throw new Error('Choose a repetition threshold from 5° to 120°.');
       }
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [lastPacketTime]);
-
-  // Timer counter when active & not paused
-  useEffect(() => {
-    if (isSessionActive && !isPaused) {
-      durationTimerRef.current = setInterval(() => {
-        setSessionDuration((prev) => prev + 1);
-      }, 1000);
-    } else {
-      if (durationTimerRef.current) clearInterval(durationTimerRef.current);
-    }
-    return () => {
-      if (durationTimerRef.current) clearInterval(durationTimerRef.current);
-    };
-  }, [isSessionActive, isPaused]);
-
-  // Start Session handler
-  const handleStartSession = async () => {
-    try {
-      setChartData([]);
-      setSessionDuration(0);
-      setSessionMaxAngle(0);
-      setSessionMinAngle(0);
-      setSessionRom(0);
-      setRepCount(0);
-
-      const resp = await api.startSession({
-        patient_id: 1,
-        exercise_key: selectedExercise,
-        affected_side: affectedSide,
-        data_source: dataSource,
+      const repsGoal = mode === 'live' && targetReps !== '' ? Number(targetReps) : undefined;
+      const angleGoal = mode === 'live' && targetAngle !== '' ? Number(targetAngle) : undefined;
+      if (repsGoal != null && (!Number.isInteger(repsGoal) || repsGoal < 1 || repsGoal > 500)) {
+        throw new Error('Enter a prescribed rep target from 1 to 500.');
+      }
+      if (angleGoal != null && (!Number.isFinite(angleGoal) || angleGoal <= 0 || angleGoal > 180)) {
+        throw new Error('Enter a prescribed movement target above 0° and up to 180°.');
+      }
+      const result = await api.startSession({
+        patient_id: isReplay ? patients[0]?.id : patientId, data_source: mode, exercise_key: exerciseKey, affected_side: side,
+        recording_id: isReplay ? record?.id : undefined, playback_speed: speed,
+        rep_peak_deg: mode === 'live' ? peak : undefined,
+        prescribed_repetitions: repsGoal, prescribed_angle_deg: angleGoal,
       });
+      const snapshot = await api.getActiveMonitoring();
+      if (snapshot?.session_id === result.session_id) setActive(snapshot);
+    });
+  }
 
-      setCurrentSessionId(resp.session_id);
-      setIsSessionActive(true);
-      setIsPaused(false);
-    } catch (err: any) {
-      alert(`Could not start session: ${err.message}`);
-    }
-  };
+  function control(action: ReplayAction, value?: PlaybackSpeed) {
+    if (!active) return;
+    run(async () => {
+      const result = await api.controlReplay(active.session_id, action, value);
+      setActive({ ...result, patient_id: active.patient_id });
+    });
+  }
 
-  // Pause / Resume
-  const handleTogglePause = () => {
-    setIsPaused(!isPaused);
-  };
-
-  // Finish session (open confirmation dialog)
-  const handleInitiateFinish = () => {
-    setShowFinishModal(true);
-  };
-
-  // Save session to database
-  const handleConfirmFinish = async () => {
-    if (!currentSessionId) return;
-    try {
-      setIsSaving(true);
-      const res = await api.finishSession(currentSessionId, sessionNotes, true);
-      setFinishedSummary(res);
-      setIsSessionActive(false);
-      setIsPaused(false);
-      setShowFinishModal(false);
-    } catch (err: any) {
-      alert(`Error saving session: ${err.message}`);
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  // Discard session with confirmation
-  const handleDiscardSession = async () => {
-    if (!currentSessionId) return;
-    if (window.confirm('Discard this monitoring session without saving?')) {
-      try {
-        await api.discardSession(currentSessionId);
-        setIsSessionActive(false);
-        setIsPaused(false);
-        setCurrentSessionId(null);
-        setChartData([]);
-      } catch (err: any) {
-        alert(`Error discarding session: ${err.message}`);
+  function save() {
+    if (!active) return;
+    run(async () => {
+      const rating = mode === 'live' && pain !== '' ? Number(pain) : undefined;
+      if (rating != null && (!Number.isInteger(rating) || rating < 0 || rating > 10)) {
+        throw new Error('Enter a whole number from 0 to 10 for pain.');
       }
-    }
-  };
+      const stiffnessRating = mode === 'live' && stiffness !== '' ? Number(stiffness) : undefined;
+      if (stiffnessRating != null && (!Number.isInteger(stiffnessRating) || stiffnessRating < 0 || stiffnessRating > 10)) {
+        throw new Error('Enter a whole number from 0 to 10 for stiffness.');
+      }
+      setSaved(await api.finishSession(active.session_id, notes.trim(), true, rating, stiffnessRating));
+      setActive(null);
+      setSaving(false);
+      setNotes('');
+      setPain('');
+      setStiffness('');
+    });
+  }
 
-  // Calibrate neutral reference
-  const handleCalibrate = async () => {
-    try {
-      const res = await api.calibrateNeutral('esp32-shoulder-01');
-      setCalibrationMsg(res.message);
-      setTimeout(() => setCalibrationMsg(null), 4000);
-    } catch (err: any) {
-      alert(`Calibration failed: ${err.message}`);
+  const monitoringSide = active?.affected_side === 'left' ? 'left' : active?.affected_side === 'right' ? 'right' : side;
+  const [hardware, setHardware] = useState<HardwareStreamStatus | null>(null);
+  const [hardwareError, setHardwareError] = useState(false);
+  const [calibrating, setCalibrating] = useState(false);
+  const [neutralMessage, setNeutralMessage] = useState('');
+  useEffect(() => {
+    if (mode !== 'live') return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    async function refresh() {
+      try {
+        const result = await api.getHardwareStream(monitoringSide);
+        if (!cancelled) { setHardware(result); setHardwareError(false); }
+      } catch {
+        if (!cancelled) { setHardware(null); setHardwareError(true); }
+      }
+      if (!cancelled) timer = setTimeout(refresh, 800);
     }
-  };
+    refresh();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [mode, monitoringSide]);
+  const currentOrientation = active?.orientation;
+  const selectedExercise = active?.exercise_key ?? exerciseKey;
+  const needsPlaneCalibration = mode === 'live' && ['flexion', 'abduction'].includes(selectedExercise);
+  const showPlaneAngles = mode !== 'live' || hardware?.axes_calibrated === true;
+  const preview = !active && mode === 'live' && hardware?.receiving ? hardware.orientation_preview : null;
+  const external = preview ? preview.ext_rotation : null;
+  const internal = preview ? preview.int_rotation : null;
+  const rotationPreview = exerciseKey === 'external_rotation' ? external : internal;
+  const primaryPreview = exerciseKey === 'flexion' ? preview?.flexion : exerciseKey === 'abduction' ? preview?.abduction : rotationPreview;
+  const orientation = currentOrientation?.quality_flag === 'VALID' &&
+    (mode !== 'live' || hardware?.receiving) ? currentOrientation : null;
 
-  // Switch mode
-  const handleModeChange = async (mode: DataSourceMode) => {
-    if (isSessionActive) {
-      alert('Finish or discard the active session before switching data sources.');
-      return;
-    }
-    setDataSource(mode);
-    try {
-      await api.connectDevice('esp32-shoulder-01', mode);
-    } catch (err) {
-      console.error(err);
-    }
-  };
+  const displayedMovement = orientation?.movement_angle_deg ??
+    (showPlaneAngles ? preview?.total_elevation : preview?.neutral_rotation);
+  const movementType = orientation?.movement_metric ?? (showPlaneAngles ? 'total_tilt' : 'neutral_rotation');
+  const movementLabel = movementType === 'neutral_rotation' ? 'Wrist orientation change' : 'Total tilt from neutral';
 
-  const formatTimer = (sec: number) => {
-    const mins = Math.floor(sec / 60);
-    const s = sec % 60;
-    return `${mins.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-  };
-
-  const currentExerciseObj = exercises.find((e) => e.exercise_key === selectedExercise);
+  const elevationExercise = ['flexion', 'abduction'].includes(exerciseKey);
+  const preferredPose = exerciseKey === 'abduction' ? 'side' : 'forward';
+  const otherPose = preferredPose === 'side' ? 'forward' : 'side';
+  const poses = hardware?.captured_poses ?? [];
+  const nextPose = poses.includes(preferredPose) ? otherPose : preferredPose;
+  const calibrationAvailable = !!hardware?.receiving && hardware.has_orientation && !!hardware.device_id;
+  function calibrate(action: () => Promise<void>) {
+    setCalibrating(true);
+    run(async () => {
+      try { await action(); } finally { setCalibrating(false); }
+    });
+  }
 
   return (
-    <div className="p-4 sm:p-6 lg:p-8 space-y-6 max-w-7xl mx-auto">
-      {/* Top Banner / Device Connection Panel */}
-      <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex items-center space-x-3.5">
-          <div
-            className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-              dataSource === 'demo' ? 'bg-teal-50 text-teal-700' : 'bg-blue-50 text-blue-700'
-            }`}
-          >
-            <Activity className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="flex items-center space-x-2">
-              <h2 className="font-bold text-slate-900 text-base">Real-Time Movement Monitoring</h2>
-              <span
-                className={`px-2 py-0.5 rounded text-[11px] font-bold uppercase ${
-                  dataSource === 'demo'
-                    ? 'bg-amber-100 text-amber-800'
-                    : 'bg-green-100 text-green-800'
-                }`}
-              >
-                {dataSource === 'demo' ? 'SIMULATED DEMO' : 'LIVE ESP32 HARDWARE'}
-              </span>
-            </div>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Dual BNO086 relative quaternion orientation pipeline
-            </p>
-          </div>
-        </div>
+    <div className="mx-auto max-w-6xl space-y-4 px-4 py-5 sm:px-6">
+      <header>
+        <h1 className="text-3xl font-bold tracking-tight text-slate-900">Live Monitoring</h1>
+      </header>
 
-        {/* Source Mode Selector & Calibration */}
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="bg-slate-100 p-1 rounded-lg flex items-center space-x-1 text-xs font-medium">
-            <button
-              onClick={() => handleModeChange('demo')}
-              className={`px-3 py-1.5 rounded-md transition-colors ${
-                dataSource === 'demo'
-                  ? 'bg-white text-slate-900 font-bold shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Demo Generator
-            </button>
-            <button
-              onClick={() => handleModeChange('live')}
-              className={`px-3 py-1.5 rounded-md transition-colors ${
-                dataSource === 'live'
-                  ? 'bg-white text-slate-900 font-bold shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              ESP32 Live Mode
-            </button>
-          </div>
-
-          <button
-            onClick={handleCalibrate}
-            className="border border-slate-300 hover:bg-slate-50 text-slate-700 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
-            title="Zero the relative sensor reference when standing naturally"
-          >
-            Calibrate Neutral
+      <div className="grid grid-cols-3 gap-2" aria-label="Session data source">
+        {sources.map(({ id, label, icon: Icon }) => (
+          <button type="button" key={id} disabled={!!active || busy} aria-pressed={mode === id}
+            onClick={() => { setSource(id); setSaved(null); setError(''); }}
+            className={`flex flex-col items-center justify-center gap-1 rounded-xl border px-2 py-2.5 text-center transition sm:flex-row sm:justify-start sm:gap-3 sm:px-3 sm:text-left ${mode === id ? 'border-teal-600 bg-teal-50 text-teal-950 ring-1 ring-teal-600' : 'border-slate-200 bg-white text-slate-800 hover:border-teal-400'}`}>
+            <Icon className="h-4 w-4 shrink-0 text-teal-700 sm:h-5 sm:w-5" /><span className="text-xs font-semibold sm:text-sm">{label}</span>
           </button>
-        </div>
+        ))}
       </div>
 
-      {/* Calibration feedback toast */}
-      {calibrationMsg && (
-        <div className="bg-teal-50 border border-teal-200 text-teal-800 px-4 py-2.5 rounded-lg text-xs flex items-center justify-between animate-fadeIn">
-          <span>✓ {calibrationMsg}</span>
-          <button onClick={() => setCalibrationMsg(null)} className="text-teal-600 hover:text-teal-800">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
+      {loading && <p role="status" className="text-sm text-slate-500">Loading exercises and recordings…</p>}
+      {!!loadErrors.length && <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+        {loadErrors.join(' ')} <button className="ml-2 underline" onClick={loadCatalog}>Retry</button>
+      </div>}
+      {!loading && isReplay && !catalog.length && !active && <p className="rounded-xl border bg-white p-4 text-sm text-slate-600">No replay recordings are available.</p>}
+      {connectionError && <p role="alert" className="text-sm text-amber-800">Monitoring connection interrupted. Reconnecting…</p>}
+      {error && <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{error}</p>}
 
-      {/* Live ESP32 Hardware Status Banner */}
-      {dataSource === 'live' && (
-        <div
-          className={`rounded-xl border p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-colors ${
-            isHardwareOnline
-              ? 'bg-emerald-50/90 border-emerald-200 text-emerald-950'
-              : 'bg-amber-50/90 border-amber-200 text-amber-950'
-          }`}
-        >
-          <div className="flex items-center space-x-3">
-            <span className="relative flex h-3.5 w-3.5">
-              {isHardwareOnline && (
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-              )}
-              <span
-                className={`relative inline-flex rounded-full h-3.5 w-3.5 ${
-                  isHardwareOnline ? 'bg-emerald-500' : 'bg-amber-500'
-                }`}
-              />
-            </span>
+      <section aria-label="Session setup and controls" className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+        {(!active || isReplay) && <div className="grid grid-cols-2 gap-3 border-b border-slate-100 p-4 sm:grid-cols-[1fr_1.8fr_auto] sm:items-end sm:p-5">
+          {isReplay ? <>
+            {!active && <>
+            <label className="text-xs font-semibold text-slate-600">Participant
+              <select aria-label="Replay participant" className={field} disabled={!!active || busy || loading} value={record?.participant ?? participant} onChange={event => chooseParticipant(event.target.value)}>
+                {!catalog.length && <option value="">No participants</option>}
+                {[...new Set(catalog.map(item => item.participant))].map(id => <option key={id} value={id}>{id.replace('spars9x_', '')}</option>)}
+              </select>
+            </label>
+            <label className="order-3 col-span-2 min-w-0 text-xs font-semibold text-slate-600 sm:order-none sm:col-span-1">Exercise recording
+              <select aria-label="Exercise recording" className={field} disabled={!!active || busy || loading} value={record?.id ?? ''} onChange={event => { setSaved(null); setRecordingId(event.target.value); }}>
+                {!catalog.length && <option value="">No recordings</option>}
+                {catalog.filter(item => item.participant === (record?.participant ?? participant)).map(item =>
+                  <option key={item.id} value={item.id}>{item.exercise_name} · side code {item.side_code} · {item.duration_s.toFixed(1)} s</option>)}
+              </select>
+            </label>
+            </>}
+            <label className="text-xs font-semibold text-slate-600">Playback speed
+              <select className={field} value={currentSpeed} disabled={busy || completed} onChange={event => {
+                const value = Number(event.target.value) as PlaybackSpeed;
+                setSpeed(value);
+                if (active) control('speed', value);
+              }}>
+                {speeds.map(value => <option key={value} value={value}>{value}×</option>)}
+              </select>
+            </label>
+          </> : <>
+            <label className="text-xs font-semibold text-slate-600">Participant
+              <select className={field} value={active?.patient_id ?? patientId ?? ''} disabled={!!active || busy}
+                onChange={event => {
+                  const id = Number(event.target.value);
+                  setPatientId(id);
+                  setSide(patients.find(item => item.id === id)?.affected_side ?? 'right');
+                }}>
+                {!patients.length && <option value="">No participants</option>}
+                {patients.map(person => <option key={person.id} value={person.id}>{person.name}</option>)}
+              </select>
+            </label>
+            <label className="order-3 col-span-2 min-w-0 text-xs font-semibold text-slate-600 sm:order-none sm:col-span-1">Exercise
+              <select aria-label="Exercise" className={field} value={active?.exercise_key ?? exerciseKey} disabled={!!active || busy} onChange={event => setExerciseKey(event.target.value)}>
+                {exercises.map(item => <option key={item.exercise_key} value={item.exercise_key}>{item.display_name}</option>)}
+              </select>
+            </label>
+            <label className="text-xs font-semibold text-slate-600">Shoulder
+              <select className={field} value={active?.affected_side ?? side} disabled={!!active || busy}
+                onChange={event => setSide(event.target.value as 'left' | 'right')}>
+                <option value="left">Left</option><option value="right">Right</option>
+              </select>
+            </label>
+          </>}
+        </div>}
+
+        <div className="bg-slate-900 p-4 text-white sm:p-5">
+          <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <div className="text-xs font-bold flex items-center gap-1.5">
-                {isHardwareOnline ? (
-                  <>
-                    <span>ESP32 Hardware: CONNECTED & STREAMING</span>
-                    <span className="text-[10px] bg-emerald-200 text-emerald-900 font-mono px-1.5 py-0.5 rounded font-bold">
-                      20 Hz Telemetry
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <span>ESP32 Hardware: WAITING FOR WI-FI PACKETS</span>
-                    <span className="text-[10px] bg-amber-200 text-amber-900 font-mono px-1.5 py-0.5 rounded font-bold">
-                      Standby
-                    </span>
-                  </>
-                )}
-              </div>
-              <p className="text-[11px] opacity-80 mt-0.5">
-                {isHardwareOnline
-                  ? `Active data packets arriving via Wi-Fi (Device: ${latestSample?.device_id || 'esp32-shoulder-01'})`
-                  : `Ensure ESP32 is powered on and connected to the same Wi-Fi. Ingest endpoint: /api/sensor/ingest`}
-              </p>
+              <h2 className="mt-1 text-2xl font-semibold tracking-tight">{displayName ?? 'Select an exercise'}</h2>
+              {displayParticipant && <p className="mt-1 text-sm text-slate-300">{displayParticipant} · {isReplay && record ? `Side ${record.side_code}` : `${monitoringSide} side`}</p>}
             </div>
+            <div className="rounded-full border border-white/20 bg-white/10 px-3 py-1 text-sm font-medium" role="status">{calibrating ? 'Calibrating' : connectionError || hardwareError && mode === 'live' ? 'Error' : mode === 'live' && hardware && !hardware.receiving ? 'Disconnected' : mode === 'live' && active ? 'Streaming' : status}</div>
           </div>
-
-          <div className="text-right flex sm:flex-col items-center sm:items-end justify-between sm:justify-center">
-            <span className="text-[10px] font-bold uppercase tracking-wider opacity-60">Status</span>
-            <span
-              className={`text-xs font-mono font-bold px-2 py-0.5 rounded ${
-                isHardwareOnline ? 'bg-emerald-200/70 text-emerald-900' : 'bg-amber-200/70 text-amber-900'
-              }`}
-            >
-              {isHardwareOnline ? 'STREAMING ACTIVE' : 'DISCONNECTED'}
-            </span>
-          </div>
+          {isReplay && record && <div className="mt-5 space-y-2">
+            <div className="flex justify-between gap-2 text-sm text-slate-200">
+              <span className="flex items-center gap-2"><Clock3 className="h-4 w-4" />{elapsed.toFixed(1)} s elapsed</span>
+              <span>{record.duration_s.toFixed(1)} s recording</span>
+            </div>
+            <progress aria-label="Replay progress" className="h-2 w-full overflow-hidden rounded-full accent-teal-400 [&::-webkit-progress-bar]:bg-slate-700 [&::-webkit-progress-value]:bg-teal-400"
+              value={elapsed} max={record.duration_s} />
+          </div>}
+          {!isReplay && active && <p className="mt-4 font-mono text-sm text-slate-300">{formatTime(elapsed)} recorded</p>}
         </div>
-      )}
 
-      {/* Control Strip & Active Session Bar */}
-      <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs flex flex-wrap items-center justify-between gap-4">
-        {/* Left: Exercise and Side Pickers */}
-        <div className="flex flex-wrap items-center gap-3">
-          <div>
-            <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
-              Select Exercise
+        <div className="flex flex-wrap items-center gap-2 p-4 sm:p-5">
+          {!active && <button className={primary} disabled={busy || !canStart} onClick={start}><Play className="h-4 w-4" />{isReplay ? 'Start replay' : 'Start session'}</button>}
+          {active && isReplay && <>
+            {!completed && <button className={button} disabled={busy} onClick={() => control(active.status === 'paused' ? 'resume' : 'pause')}>
+              {active.status === 'paused' ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}{active.status === 'paused' ? 'Resume' : 'Pause'}
+            </button>}
+            <button className={button} disabled={busy} onClick={() => control('restart', currentSpeed)}><RotateCcw className="h-4 w-4" />Restart</button>
+          </>}
+          {active && <>
+            <button className={primary} disabled={busy || (isReplay && !elapsed)} onClick={() => setSaving(value => !value)}><Save className="h-4 w-4" />Finish &amp; Save</button>
+            <button className="px-2 py-2 text-sm font-medium text-slate-600 hover:text-rose-700" disabled={busy} onClick={() => {
+              if (window.confirm('Discard this unsaved session?')) run(async () => { await api.discardSession(active.session_id); setActive(null); setSaving(false); });
+            }}>Discard</button>
+          </>}
+        </div>
+
+        {mode === 'live' && !active && <details className="border-t border-slate-100 px-4 py-3 sm:px-5">
+          <summary className="cursor-pointer text-sm font-medium text-slate-700">Session options{(targetReps || targetAngle) && ' · targets set'}</summary>
+          <div className="mt-3 grid gap-3 sm:grid-cols-3">
+            <label className="text-sm text-slate-700">Prescribed reps
+              <input className={field} type="number" min={1} max={500} value={targetReps} onChange={event => setTargetReps(event.target.value)} />
             </label>
-            <select
-              value={selectedExercise}
-              onChange={(e) => setSelectedExercise(e.target.value)}
-              disabled={isSessionActive}
-              className="text-xs bg-slate-50 border border-slate-300 rounded-lg px-3 py-1.5 font-medium text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-500 disabled:opacity-60"
-            >
-              {exercises.map((ex) => (
-                <option key={ex.exercise_key} value={ex.exercise_key}>
-                  {ex.display_name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
-              Affected Shoulder
+            <label className="text-sm text-slate-700">Prescribed excursion (°)
+              <input className={field} type="number" min={0.1} max={180} step="any" value={targetAngle} onChange={event => setTargetAngle(event.target.value)} />
             </label>
-            <div className="flex rounded-lg border border-slate-300 overflow-hidden text-xs">
-              <button
-                type="button"
-                disabled={isSessionActive}
-                onClick={() => setAffectedSide('left')}
-                className={`px-3 py-1.5 font-medium ${
-                  affectedSide === 'left' ? 'bg-teal-600 text-white font-bold' : 'bg-white text-slate-700'
-                }`}
-              >
-                Left
-              </button>
-              <button
-                type="button"
-                disabled={isSessionActive}
-                onClick={() => setAffectedSide('right')}
-                className={`px-3 py-1.5 font-medium border-l border-slate-300 ${
-                  affectedSide === 'right' ? 'bg-teal-600 text-white font-bold' : 'bg-white text-slate-700'
-                }`}
-              >
-                Right
-              </button>
-            </div>
+            <label className="text-sm text-slate-700">Rep detection threshold (°)
+              <input type="number" min={5} max={120} step="1" className={field} disabled={busy}
+                value={repPeak} onChange={event => setRepPeak(event.target.value)} />
+            </label>
           </div>
-        </div>
+        </details>}
 
-        {/* Right: Controls & Timer */}
-        <div className="flex items-center space-x-3">
-          {/* Duration Clock */}
-          <div className="flex items-center space-x-1.5 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-lg text-xs font-mono font-bold text-slate-800">
-            <Clock className="w-3.5 h-3.5 text-slate-500" />
-            <span>{formatTimer(sessionDuration)}</span>
+        {saving && active && <div className="grid gap-3 border-t bg-slate-50 p-5 sm:grid-cols-2">
+          <label className="text-sm text-slate-700">Session notes (optional)<textarea className={field} value={notes} onChange={event => setNotes(event.target.value)} /></label>
+          {mode === 'live' && <label className="text-sm text-slate-700">Self-reported pain (optional, 0–10)
+            <input className={field} type="number" min={0} max={10} value={pain} onChange={event => setPain(event.target.value)} />
+          </label>}
+          {mode === 'live' && <label className="text-sm text-slate-700">Self-reported stiffness (optional, 0–10)
+            <input className={field} type="number" min={0} max={10} value={stiffness} onChange={event => setStiffness(event.target.value)} />
+          </label>}
+          <div className="flex items-center gap-2 sm:col-span-2">
+            <button className={primary} onClick={save} disabled={busy}>Confirm &amp; Save</button>
+            <button className={button} onClick={() => setSaving(false)}>Cancel</button>
           </div>
+        </div>}
+      </section>
 
-          {/* Action Buttons */}
-          {!isSessionActive ? (
-            <button
-              onClick={handleStartSession}
-              className="inline-flex items-center space-x-1.5 bg-teal-600 hover:bg-teal-700 text-white px-4 py-2 rounded-lg font-semibold text-xs shadow-xs transition-colors"
-            >
-              <Play className="w-3.5 h-3.5 fill-current" />
-              <span>Start Session</span>
-            </button>
-          ) : (
-            <div className="flex items-center space-x-2">
-              <button
-                onClick={handleTogglePause}
-                className="inline-flex items-center space-x-1 bg-slate-100 hover:bg-slate-200 text-slate-800 px-3 py-2 rounded-lg font-medium text-xs transition-colors"
-              >
-                {isPaused ? <Play className="w-3.5 h-3.5 fill-current" /> : <Pause className="w-3.5 h-3.5 fill-current" />}
-                <span>{isPaused ? 'Resume' : 'Pause'}</span>
-              </button>
-
-              <button
-                onClick={handleInitiateFinish}
-                className="inline-flex items-center space-x-1 bg-teal-600 hover:bg-teal-700 text-white px-3.5 py-2 rounded-lg font-semibold text-xs shadow-xs transition-colors"
-              >
-                <CheckCircle className="w-3.5 h-3.5" />
-                <span>Finish & Save</span>
-              </button>
-
-              <button
-                onClick={handleDiscardSession}
-                className="inline-flex items-center space-x-1 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 px-2.5 py-2 rounded-lg font-medium text-xs transition-colors"
-                title="Discard session"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Main Workspace Grid: Kinematics Visualizer & Live Measurements */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left: Upper Body Kinematic Model (5 cols) */}
-        <div className="lg:col-span-5 h-[440px]">
-          <ArmVisualization
-            angle={latestSample?.primary_angle ?? 0}
-            maxAngle={sessionMaxAngle}
-            exerciseKey={selectedExercise}
-            affectedSide={affectedSide}
-            dataSource={dataSource}
-          />
-        </div>
-
-        {/* Right: Live Telemetry Cards & Rolling Real-Time Chart (7 cols) */}
-        <div className="lg:col-span-7 flex flex-col justify-between space-y-4">
-          {/* Real-time Kinematic Metric Chips */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {/* Elevation Angle */}
-            <div className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-xs">
-              <div className="text-[10px] text-slate-400 font-semibold uppercase">Current Angle</div>
-              <div className="text-2xl font-bold text-teal-700 mt-1">
-                {latestSample ? `${latestSample.primary_angle.toFixed(1)}°` : '0.0°'}
-              </div>
-              <div className="text-[10px] text-slate-500 mt-1">
-                Vel: {latestSample?.angular_velocity ?? 0} °/s
-              </div>
-            </div>
-
-            {/* Range of Motion */}
-            <div className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-xs">
-              <div className="text-[10px] text-slate-400 font-semibold uppercase">Session ROM</div>
-              <div className="text-2xl font-bold text-slate-900 mt-1">
-                {sessionRom.toFixed(1)}°
-              </div>
-              <div className="text-[10px] text-slate-500 mt-1">
-                Max: {sessionMaxAngle.toFixed(1)}°
-              </div>
-            </div>
-
-            {/* Repetitions */}
-            <div className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-xs">
-              <div className="text-[10px] text-slate-400 font-semibold uppercase">Completed Reps</div>
-              <div className="text-2xl font-bold text-blue-700 mt-1">{repCount}</div>
-              <div className="text-[10px] text-slate-500 mt-1">FSM verified</div>
-            </div>
-
-            {/* FSM Phase Indicator */}
-            <div className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-xs">
-              <div className="text-[10px] text-slate-400 font-semibold uppercase">Rep State</div>
-              <div className="text-sm font-bold text-slate-800 mt-2 flex items-center space-x-1.5">
-                <span
-                  className={`w-2.5 h-2.5 rounded-full ${
-                    repState === 'ASCENT'
-                      ? 'bg-amber-500 animate-pulse'
-                      : repState === 'DESCENT'
-                      ? 'bg-blue-500 animate-pulse'
-                      : 'bg-slate-300'
-                  }`}
-                />
-                <span>{repState}</span>
-              </div>
-              <div className="text-[10px] text-slate-400 mt-1.5">Direction Hysteresis</div>
-            </div>
+      {!isReplay && (
+        <section className="grid gap-4 lg:grid-cols-2" aria-label="Live orientation and sensor status">
+          <div className="min-w-0">
+            <ArmVisualization angle={needsPlaneCalibration ? displayedMovement ?? null : orientation?.primary_angle ?? primaryPreview ?? null}
+              maxAngle={orientation?.session_max_angle ?? null}
+              angleLabel={needsPlaneCalibration ? movementLabel : undefined}
+              movementPreview={needsPlaneCalibration && movementType === 'neutral_rotation'}
+              waitingMessage={mode === 'live' && calibrationAvailable && !hardware?.neutral_calibrated
+                ? active ? 'Finish or discard this session, then select Set neutral.' : 'Select Set neutral to start the arm preview.'
+                : undefined}
+              exerciseKey={active?.exercise_key ?? exerciseKey}
+              affectedSide={(active?.affected_side ?? side) === 'left' ? 'left' : 'right'}
+              dataSource={mode} />
           </div>
-
-          {/* Real-time Angle & Angular Velocity Chart */}
-          <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs flex-1 flex flex-col justify-between">
-            <div className="flex items-center justify-between mb-2">
-              <div>
-                <h4 className="text-xs font-bold text-slate-900">Shoulder Angle & Velocity vs. Time</h4>
-                <p className="text-[11px] text-slate-500">Rolling window (last 50 packets)</p>
-              </div>
-              <div className="flex items-center space-x-3 text-[11px]">
-                <div className="flex items-center space-x-1 text-teal-700 font-semibold">
-                  <span className="w-3 h-0.5 bg-teal-600 rounded"></span>
-                  <span>Angle (°)</span>
-                </div>
-                <div className="flex items-center space-x-1 text-amber-600 font-semibold">
-                  <span className="w-3 h-0.5 bg-amber-500 rounded"></span>
-                  <span>Velocity (°/s)</span>
-                </div>
-              </div>
+          <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <h2 className="text-lg font-semibold">Session measurements</h2>
+              {mode === 'live' && <button className={button}
+                disabled={busy || !!active || !hardware?.receiving || !hardware.has_orientation || !hardware.device_id}
+                onClick={() => calibrate(async () => {
+                  if (!hardware?.device_id) return;
+                  setNeutralMessage('');
+                  await api.calibrateNeutral(hardware.device_id);
+                  setNeutralMessage('Neutral captured at 0°.');
+                  setHardware(await api.getHardwareStream(monitoringSide));
+                })}>Set neutral</button>}
             </div>
-
-            <div className="h-56 w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="2 2" stroke="#f1f5f9" />
-                  <XAxis dataKey="time" stroke="#cbd5e1" fontSize={9} tickLine={false} />
-                  <YAxis stroke="#cbd5e1" fontSize={9} tickLine={false} domain={[0, 'auto']} />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: '#ffffff', borderRadius: '8px', border: '1px solid #e2e8f0', fontSize: '11px' }}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="angle"
-                    stroke="#0d9488"
-                    strokeWidth={2}
-                    dot={false}
-                    isAnimationActive={false}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="velocity"
-                    stroke="#f59e0b"
-                    strokeWidth={1.5}
-                    dot={false}
-                    strokeDasharray="3 3"
-                    isAnimationActive={false}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-
-            {/* Exercise Guidance Tip */}
-            {currentExerciseObj && (
-              <div className="mt-2 p-2.5 rounded-lg bg-slate-50 border border-slate-100 text-[11px] text-slate-600 flex items-start space-x-2">
-                <span className="font-semibold text-slate-700 flex-shrink-0">Instructions:</span>
-                <span>{currentExerciseObj.instructions}</span>
-              </div>
+            {mode === 'live' && !active && elevationExercise && hardware?.neutral_calibrated && !hardware.axes_calibrated && (
+              <details className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+                <summary className="cursor-pointer font-semibold">Shared sensor setup · {poses.length}/2 directions</summary>
+                <p className="mt-2">Forward and side raises establish the torso axes.</p>
+                <button className={`${button} mt-2`} disabled={busy || !calibrationAvailable}
+                  onClick={() => calibrate(async () => {
+                    if (!hardware?.device_id) return;
+                    await api.captureMotionAxis(hardware.device_id, nextPose, side);
+                    setHardware(await api.getHardwareStream(monitoringSide));
+                    setNeutralMessage(poses.length ? 'Torso axes aligned.' : 'Direction captured.');
+                  })}>{nextPose === 'forward' ? 'Capture forward raise' : 'Capture side raise'}</button>
+              </details>
             )}
-          </div>
-        </div>
-      </div>
-
-      {/* Finished Session Post-Summary Banner (if just completed) */}
-      {finishedSummary && (
-        <div className="bg-white border-2 border-teal-500 rounded-xl p-5 shadow-sm space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-2 text-teal-800">
-              <CheckCircle className="w-5 h-5 text-teal-600" />
-              <h3 className="font-bold text-base">Session #{finishedSummary.session.id} Recorded Successfully!</h3>
-            </div>
-            <button
-              onClick={() => setFinishedSummary(null)}
-              className="text-xs text-slate-400 hover:text-slate-600"
-            >
-              Dismiss
-            </button>
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-            <div className="bg-slate-50 p-2.5 rounded-lg">
-              <span className="text-slate-500">Exercise</span>
-              <div className="font-semibold text-slate-900 mt-0.5">{finishedSummary.exercise_name}</div>
-            </div>
-            <div className="bg-slate-50 p-2.5 rounded-lg">
-              <span className="text-slate-500">Repetitions</span>
-              <div className="font-semibold text-teal-700 mt-0.5">{finishedSummary.session.repetitions} completed</div>
-            </div>
-            <div className="bg-slate-50 p-2.5 rounded-lg">
-              <span className="text-slate-500">Measured ROM</span>
-              <div className="font-bold text-slate-900 mt-0.5">{finishedSummary.session.rom}°</div>
-            </div>
-            <div className="bg-slate-50 p-2.5 rounded-lg">
-              <span className="text-slate-500">Consistency Index</span>
-              <div className="font-semibold text-slate-800 mt-0.5">
-                {finishedSummary.session.smoothness_score ?? '—'}/100
+            {mode === 'live' && !active && <p className="text-sm text-slate-600">
+              {neutralMessage ? <span role="status">{neutralMessage}</span>
+                : !calibrationAvailable ? 'Waiting for chest and wrist readings.'
+                : hardware?.neutral_calibrated ? 'Neutral set.' : 'Lower the arm and set neutral.'}
+            </p>}
+            <dl className="divide-y divide-slate-100 text-sm">
+              <div className="flex items-center justify-between gap-3 py-3">
+                <dt className="text-slate-600">Estimated reps</dt>
+                <dd className="text-2xl font-semibold tabular-nums">{metrics?.estimated_repetition_count ?? '—'}</dd>
               </div>
-            </div>
+              {repReview?.median_peak_deg != null && <div className="flex justify-between gap-3 py-3">
+                <dt className="text-slate-600">Typical peak <span className="text-xs">(last 3 reps)</span></dt>
+                <dd className="font-semibold">{measurement(repReview.median_peak_deg, '°')}</dd>
+              </div>}
+            </dl>
+            {active && needsPlaneCalibration && displayedMovement == null && <p className="text-sm text-amber-800">
+              {hardware?.receiving && !hardware.neutral_calibrated
+                ? 'Finish or discard the session to set neutral.'
+                : 'Waiting for paired orientations.'}
+            </p>}
+
           </div>
+        </section>
+      )}
+
+      {(completed || saved) && <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-teal-200 bg-teal-50 p-4 text-sm text-teal-900">
+        <span className="flex items-center gap-2"><CircleCheck className="h-5 w-5" />
+          {saved ? `Session #${saved.session.id} saved · ${saved.exercise_name} · ${saved.session.duration_seconds.toFixed(1)} s` : 'Replay complete. Review the recording summary, then save the session.'}
+        </span>
+        {saved && onOpenProgress && <button className="font-semibold underline" onClick={() => onOpenProgress(saved.session.data_source)}>View progress</button>}
+      </div>}
+
+      {isReplay && metrics?.estimated_repetition_count != null && (
+        <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3">
+          <span className="text-sm text-slate-600">Estimated reps</span>
+          <strong className="text-xl tabular-nums">{metrics.estimated_repetition_count}</strong>
         </div>
       )}
 
-      {/* Finish Session Modal Dialog */}
-      {showFinishModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
-          <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 space-y-4 border border-slate-200">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="font-bold text-slate-900 text-base">Finish & Save Session</h3>
-              <button onClick={() => setShowFinishModal(false)} className="text-slate-400 hover:text-slate-600">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="space-y-3 text-xs">
-              <div className="bg-slate-50 p-3 rounded-lg space-y-1.5 border border-slate-100">
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Exercise</span>
-                  <span className="font-semibold text-slate-900 capitalize">{selectedExercise}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Data Source</span>
-                  <span className="font-bold text-teal-700 uppercase">{dataSource}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Reps Completed</span>
-                  <span className="font-bold text-slate-900">{repCount}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Measured ROM</span>
-                  <span className="font-bold text-slate-900">{sessionRom.toFixed(1)}°</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Duration</span>
-                  <span className="font-mono text-slate-800">{formatTimer(sessionDuration)}</span>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-slate-600 font-medium mb-1">
-                  Session Notes (Optional)
-                </label>
-                <textarea
-                  value={sessionNotes}
-                  onChange={(e) => setSessionNotes(e.target.value)}
-                  placeholder="e.g. Mild resistance felt at 70 degrees, rested 10s between reps."
-                  rows={3}
-                  className="w-full text-xs p-2.5 border border-slate-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-teal-500"
-                />
-              </div>
-
-              <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-[11px] text-amber-800">
-                Session data will be permanently saved with the <strong>{dataSource.toUpperCase()}</strong> tag in the local SQLite database.
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-100">
-              <button
-                onClick={() => setShowFinishModal(false)}
-                className="px-4 py-2 text-xs font-medium text-slate-600 hover:text-slate-800"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirmFinish}
-                disabled={isSaving}
-                className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white font-semibold text-xs rounded-lg shadow-xs transition-colors flex items-center space-x-1.5"
-              >
-                <Save className="w-3.5 h-3.5" />
-                <span>{isSaving ? 'Saving...' : 'Confirm & Save'}</span>
-              </button>
-            </div>
-          </div>
+      {(active || saved) && <details className="rounded-xl border border-slate-200 bg-white p-4">
+        <summary className="cursor-pointer text-sm font-semibold text-slate-700">Movement details</summary>
+        <div className="mt-3 space-y-3">
+          <MovementAnalytics metrics={metrics} />
+          {orientation?.angular_velocity != null && displayedMovement != null && <p className="text-sm text-slate-600">Angle speed {measurement(orientation.angular_velocity, '°/s')}</p>}
+          {orientation?.off_plane && showPlaneAngles && <p className="text-sm text-slate-600">Movement includes forward and sideways motion.</p>}
+          <SessionTimeline metrics={metrics} duration={active ? duration : saved?.session.duration_seconds ?? duration} elapsed={elapsed} />
         </div>
-      )}
+      </details>}
+
+      <details className="rounded-xl border border-slate-200 bg-white p-4">
+        <summary className="cursor-pointer select-none text-sm font-semibold text-slate-700">Technical details</summary>
+        <div className="mt-4 space-y-3 text-sm text-slate-600">
+            {mode === 'live' && <div className="space-y-2 border-t border-slate-200 pt-4 text-sm">
+              <h3 className="font-semibold">ESP32 packet monitor</h3>
+              <p className={hardware?.receiving ? 'font-semibold text-teal-700' : 'font-semibold text-amber-800'}>
+                {hardwareError ? 'Backend status unavailable' : !hardware ? 'Checking for ESP32 packets…' : hardware.receiving
+                  ? 'Receiving ESP32 packets' : hardware.valid_packets ? 'ESP32 stream has stopped' : 'No valid ESP32 packets received'}
+              </p>
+              {hardware && <>
+                <p>Accepted packets <b>{hardware.valid_packets}</b> · Rejected <b>{hardware.rejected_packets}</b></p>
+                <p>Last valid packet {hardware.last_packet_age_s == null ? '—' : `${hardware.last_packet_age_s.toFixed(1)} s ago`}</p>
+                {hardware.sensors.length > 0 && <p>{hardware.device_id} · {hardware.sensors.join(' + ')}</p>}
+                {hardware.receiving && !hardware.has_orientation && <p>Arm animation requires chest and limb orientation in the same packet.</p>}
+                {hardware.receiving && !hardware.has_wrist_vectors && <p>Wrist speed and jerk require wrist accelerometer and gyroscope values.</p>}
+              </>}
+              {active && currentOrientation && !orientation && currentOrientation.quality_flag !== 'VALID' &&
+                <p className="text-slate-500">Latest orientation status: {currentOrientation.quality_flag.toLowerCase().replace(/_/g, ' ')}.</p>}
+            </div>}
+          {!!(active?.wrist_trace.length || saved?.session.movement_analytics?.wrist_trace?.length) ?
+            <WristChart data={active?.wrist_trace ?? saved?.session.movement_analytics?.wrist_trace ?? []} />
+            : <p>Wrist signals appear here when accelerometer and gyroscope data are received.</p>}
+          {mode === 'live' && <OrientationDiagnostics key={`${exerciseKey}:${side}:${neutralMessage}`}
+            hardware={hardware} exercise={active?.exercise_key ?? exerciseKey} active={!!active} />}
+          {metrics?.relative_excursion_deg != null && <p>Chest-relative sensor excursion {measurement(metrics.relative_excursion_deg, '°')}. Depends on sensor placement and calibration.</p>}
+        </div>
+      </details>
     </div>
   );
-};
+}

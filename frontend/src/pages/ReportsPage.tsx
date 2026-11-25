@@ -1,3 +1,4 @@
+import { MovementAnalytics, measurement } from '../components/monitoring/MovementAnalytics';
 import React, { useEffect, useState } from 'react';
 import {
   FileText,
@@ -50,10 +51,7 @@ export const ReportsPage: React.FC = () => {
       {/* Title & Print Action */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 print:hidden">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900">Physiotherapy Clinical Report</h1>
-          <p className="text-xs sm:text-sm text-slate-500 mt-1">
-            Standardized rehabilitation summary for clinician and physiotherapist consultation
-          </p>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900">Session reports</h1>
         </div>
 
         <div className="flex items-center space-x-3">
@@ -64,7 +62,7 @@ export const ReportsPage: React.FC = () => {
           >
             {sessions.map((s) => (
               <option key={s.id} value={s.id}>
-                Session #{s.id} ({s.exercise_key} — {s.rom}°)
+                Session #{s.id} ({s.movement_analytics?.recording?.exercise_name ?? s.exercise_key} · {s.data_source})
               </option>
             ))}
           </select>
@@ -92,7 +90,7 @@ export const ReportsPage: React.FC = () => {
                 <span className="w-2.5 h-2.5 rounded-full bg-teal-600"></span>
                 <span className="text-xs font-bold text-teal-700 tracking-wider uppercase">ShoulderSense Clinical Telemetry</span>
               </div>
-              <h2 className="text-xl font-bold text-slate-900 mt-1">Movement Analysis & ROM Progress Report</h2>
+              <h2 className="text-xl font-bold text-slate-900 mt-1">Movement and Session Progress</h2>
               <div className="text-xs text-slate-500 mt-0.5">
                 Report Reference: <span className="font-mono font-semibold">{report.report_id}</span> • Generated {report.generated_at}
               </div>
@@ -134,21 +132,21 @@ export const ReportsPage: React.FC = () => {
             </h3>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
               <div className="p-3.5 rounded-lg border border-slate-200">
-                <span className="text-slate-400 font-medium">Measured ROM</span>
-                <div className="text-2xl font-bold text-teal-700 mt-1">{report.session.rom}°</div>
+                <span className="text-slate-400 font-medium">Relative sensor excursion</span>
+                <div className="text-2xl font-bold text-teal-700 mt-1">{measurement(report.movement_analytics?.relative_excursion_deg, '°')}</div>
                 <div className="text-[10px] text-slate-500 mt-1">
-                  Elevation range: {report.session.min_angle}° to {report.session.max_angle}°
+                  {report.movement_analytics?.angle_source && `Sensor angle: ${report.session.min_angle}° to ${report.session.max_angle}°`}
                 </div>
               </div>
 
               <div className="p-3.5 rounded-lg border border-slate-200">
-                <span className="text-slate-400 font-medium">Completed Repetitions</span>
-                <div className="text-2xl font-bold text-slate-900 mt-1">{report.session.repetitions}</div>
+                <span className="text-slate-400 font-medium">Estimated repetitions</span>
+                <div className="text-2xl font-bold text-slate-900 mt-1">{report.movement_analytics?.estimated_repetition_count ?? '—'}</div>
                 <div className="text-[10px] text-slate-500 mt-1">Duration: {report.session.duration_seconds}s</div>
               </div>
 
               <div className="p-3.5 rounded-lg border border-slate-200">
-                <span className="text-slate-400 font-medium">ROM Change vs. Prior</span>
+                <span className="text-slate-400 font-medium">Excursion change vs. prior</span>
                 <div className="text-2xl font-bold text-slate-900 mt-1">
                   {report.session.rom_change_vs_prior !== null
                     ? `${report.session.rom_change_vs_prior > 0 ? '+' : ''}${report.session.rom_change_vs_prior}°`
@@ -158,9 +156,9 @@ export const ReportsPage: React.FC = () => {
               </div>
 
               <div className="p-3.5 rounded-lg border border-slate-200">
-                <span className="text-slate-400 font-medium">Kinematic Smoothness</span>
+                <span className="text-slate-400 font-medium">Wrist jerk RMS</span>
                 <div className="text-2xl font-bold text-purple-700 mt-1">
-                  {report.session.smoothness_score ?? '—'}/100
+                  {measurement(report.movement_analytics?.wrist_jerk_rms_m_s3, ' m/s³', 2)}
                 </div>
                 <div className="text-[10px] text-slate-500 mt-1">
                   Avg rep: {report.session.avg_rep_duration ?? '—'}s
@@ -175,40 +173,7 @@ export const ReportsPage: React.FC = () => {
             <p>{report.clinical_summary}</p>
           </div>
 
-          {/* Machine Learning & Demonstration Assessment */}
-          <div className="border border-slate-200 rounded-xl p-4 space-y-3 text-xs">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-              <span className="font-bold text-slate-900">Movement Quality Model Evaluation</span>
-              <span className="text-[10px] font-mono text-slate-400">STATUS: {report.ml_status.status_message}</span>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="p-3 rounded-lg bg-slate-50 border border-slate-100">
-                <span className="text-slate-400 font-medium">ML Classifier Output:</span>
-                <div className="font-semibold text-slate-700 mt-1">
-                  {report.ml_status.predicted_class || 'ML movement assessment is not configured yet.'}
-                </div>
-                <p className="text-[10px] text-slate-400 mt-1">
-                  * Pipeline awaits cohort validation before enabling automated inference.
-                </p>
-              </div>
-
-              <div className="p-3 rounded-lg bg-slate-50 border border-slate-100">
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-400 font-medium">Demonstration Heuristic:</span>
-                  <span className="text-[10px] text-amber-700 font-bold uppercase bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
-                    Rule-Based Demo
-                  </span>
-                </div>
-                <div className="font-semibold text-slate-800 mt-1">
-                  {report.rule_based_demonstration.demonstration_category} ({report.rule_based_demonstration.heuristic_score}/100)
-                </div>
-                <p className="text-[10px] text-slate-400 mt-1">
-                  {report.rule_based_demonstration.disclaimer}
-                </p>
-              </div>
-            </div>
-          </div>
+          <MovementAnalytics metrics={report.movement_analytics} />
 
           {/* Notes */}
           {report.session.notes && (

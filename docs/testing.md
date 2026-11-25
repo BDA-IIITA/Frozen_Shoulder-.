@@ -1,14 +1,16 @@
 # Automated Testing Guide
 
-The ShoulderSense test suite includes 12 automated unit and integration tests covering the complete backend, database, biomechanical quaternion math, repetition state machine, and WebSocket streaming.
+The ShoulderSense test suite includes 64 automated unit and integration tests covering the backend, database, biomechanical quaternion math, repetition state machine, WebSocket streaming, flexion replay, and analytics performance.
 
 ## Running the Automated Test Suite
 
 ```bash
+source .venv/bin/activate
 cd backend
-source venv/bin/activate
-PYTHONPATH=. pytest -v tests/test_backend.py
+PYTHONPATH=. pytest -q
 ```
+
+The original 12 core backend tests live in `tests/test_backend.py`; flexion and analytics coverage is in `tests/test_flexion.py` and `tests/test_performance.py`.
 
 ## Test Coverage Summary
 

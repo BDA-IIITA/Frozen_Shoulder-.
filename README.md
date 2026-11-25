@@ -4,14 +4,14 @@ Wearable IMU-Based Shoulder Movement Monitoring, Biomechanical Range-of-Motion (
 
 ---
 
-## 1. Project Directory Location
+## 1. Project Location
 
-All source code, configuration, tests, documentation, and firmware files are located at:
-```
-/Users/kartikaggarwal/.gemini/antigravity/scratch/shouldersense/
-```
+All source code, configuration, tests, documentation, and firmware files live in this repository. Work from the repository root after cloning:
 
-> **Recommendation:** Set `/Users/kartikaggarwal/.gemini/antigravity/scratch/shouldersense` as your active workspace in Antigravity IDE (`File -> Open Folder`).
+```bash
+git clone https://github.com/BDA-IIITA/Frozen_Shoulder-..git
+cd Frozen_Shoulder-.
+```
 
 ---
 
@@ -46,11 +46,28 @@ shouldersense/
 │   │       │   ├── simulator.py        # Deterministic 20Hz biological Demo Mode generator
 │   │       │   └── ingestion.py        # Central sensor pipeline (Demo / ESP32 Live Mode)
 │   │       ├── analytics/
-│   │       │   └── progress_service.py # Recovery narrative, ROM delta, session comparison
+│   │       │   ├── progress_service.py # Recovery narrative, ROM delta, session comparison
+│   │       │   ├── dataset_reference.py # SPARS9x wrist reference summary
+│   │       │   ├── performance.py      # Experimental performance index
+│   │       │   ├── session_metrics.py  # Per-session measurement aggregation
+│   │       │   └── wrist_jerk.py       # Sparse wrist jerk estimate
+│   │       ├── flexion/
+│   │       │   ├── offline.py          # Dataset processing, training and evaluation
+│   │       │   ├── inference.py        # Novelty and cycle scoring
+│   │       │   ├── replay.py           # Recorded-session replay catalog
+│   │       │   ├── dataset.py          # SPARS9x CSV loading
+│   │       │   ├── annotation.py       # Cycle annotation utilities
+│   │       │   ├── exercise_rep_study.py # Repetition reference study
+│   │       │   ├── rep_study.py        # Neutral-candidate repetition study
+│   │       │   ├── repetitions.py      # Wrist cycle estimation
+│   │       │   ├── signal.py           # Signal helpers
+│   │       │   └── live_rep_reference.py # Live repetition reference loader
 │   │       └── ml/
 │   │           └── movement_classifier.py # Modular ML candidate interface (unvalidated safeguard)
 │   ├── tests/
-│   │   └── test_backend.py             # 12 automated test suites (all passing)
+│   │   ├── test_backend.py             # Core backend and WebSocket tests
+│   │   ├── test_flexion.py             # Dataset replay and flexion pipeline tests
+│   │   └── test_performance.py         # Analytics performance tests
 │   ├── requirements.txt                # Python dependencies
 │   └── run.py                          # Backend launch runner
 ├── frontend/
@@ -62,7 +79,11 @@ shouldersense/
 │   │   │   ├── common/
 │   │   │   │   └── MetricCard.tsx      # Clean medical metric cards
 │   │   │   └── monitoring/
-│   │   │       └── ArmVisualization.tsx# SVG interactive kinematic upper-body diagram
+│   │   │       ├── ArmVisualization.tsx # SVG interactive kinematic upper-body diagram
+│   │   │       ├── MovementAnalytics.tsx # Dataset replay movement analytics
+│   │   │       ├── OrientationDiagnostics.tsx # Sensor orientation diagnostics
+│   │   │       ├── PersonalProgress.tsx # Personal baseline comparison
+│   │   │       └── SessionTimeline.tsx # Session timeline view
 │   │   ├── pages/
 │   │   │   ├── OverviewPage.tsx        # Dashboard: ROM trends, weekly activity, telemetry
 │   │   │   ├── LiveMonitoringPage.tsx  # Real-time charts, controls, FSM rep states, save modal
@@ -86,16 +107,26 @@ shouldersense/
 │   ├── tsconfig.json
 │   └── vite.config.ts                  # Vite config with backend proxy
 ├── firmware/
-│   └── esp32_bno086_example/
-│       └── esp32_bno086_example.ino    # Arduino C++ dual BNO086 I2C Wi-Fi transmitter
+│   ├── esp32_bno086_example/
+│   │   └── esp32_bno086_example.ino    # Arduino C++ dual BNO086 I2C Wi-Fi transmitter
+│   └── esp32_bno086_dual_bus/
+│       └── esp32_bno086_dual_bus.ino   # Dual I2C-bus BNO086 variant
 ├── docs/
 │   ├── architecture.md                 # Biomechanical model & FSM documentation
 │   ├── sensor_protocol.md              # Documented JSON schema & wiring diagram
 │   ├── setup.md                        # Step-by-step installation instructions
-│   └── testing.md                      # Automated test suite documentation
+│   ├── testing.md                      # Automated test suite documentation
+│   ├── flexion-pipeline.md             # Ten-participant pilot pipeline
+│   ├── spars9x-replay.md               # 20-participant replay and evaluation guide
+│   ├── spars9x-cycle-review.csv        # Manual cycle annotation review data
+│   ├── live-angle-validation.md        # Live angle validation notes
+│   └── personal-progress.md            # Personal baseline method
 ├── .env.example
+├── ShoulderSense_Canva_Prompt.txt       # Presentation outline prompt
 └── README.md
 ```
+
+> The raw `dataset/` and generated `artifacts/` directories are local-only and intentionally git-ignored. Recreate them with the commands in [SPARS9x replay and evaluation](docs/spars9x-replay.md).
 
 ---
 
@@ -104,8 +135,8 @@ shouldersense/
 ### Step 1: Start the Backend (Port 8000)
 
 ```bash
-cd /Users/kartikaggarwal/.gemini/antigravity/scratch/shouldersense/backend
-source venv/bin/activate
+cd backend
+source ../.venv/bin/activate
 python3 run.py
 ```
 - API is running at: `http://localhost:8000`
@@ -115,7 +146,8 @@ python3 run.py
 
 In a new terminal:
 ```bash
-cd /Users/kartikaggarwal/.gemini/antigravity/scratch/shouldersense/frontend
+cd frontend
+npm install
 npm run dev
 ```
 - Web Application is running at: `http://localhost:5173`
@@ -125,12 +157,12 @@ npm run dev
 ## 4. Running Automated Tests
 
 ```bash
-cd /Users/kartikaggarwal/.gemini/antigravity/scratch/shouldersense/backend
-source venv/bin/activate
-PYTHONPATH=. pytest -v tests/test_backend.py
+cd backend
+source ../.venv/bin/activate
+PYTHONPATH=. pytest -q
 ```
 
-All 12 automated tests run and verify:
+All 64 automated tests run and verify:
 1. Health endpoint (`/api/health`)
 2. Database initialization and exercise configurations
 3. Quaternion normalization, Hamiltonian multiplication, relative rotation
@@ -143,6 +175,8 @@ All 12 automated tests run and verify:
 10. Analytics & multi-session comparison endpoints
 11. Physiotherapy clinical report generation
 12. Real-time WebSocket streaming (`/ws/live`)
+
+The remaining tests in `test_flexion.py` and `test_performance.py` cover SPARS9x dataset loading, replay, cycle/repetition scoring, and analytics performance.
 
 ---
 
@@ -163,9 +197,13 @@ All 12 automated tests run and verify:
 
 ## 6. Connecting the Physical ESP32 Hardware
 
-1. Flash `/firmware/esp32_bno086_example/esp32_bno086_example.ino` to your ESP32-WROOM-32 via Arduino IDE.
+1. Flash `firmware/esp32_bno086_example/esp32_bno086_example.ino` (or the dual-bus variant in `firmware/esp32_bno086_dual_bus/`) to your ESP32-WROOM-32 via Arduino IDE.
 2. Ensure both the ESP32 and your computer are connected to the same local Wi-Fi network.
 3. In `esp32_bno086_example.ino`, set `BACKEND_INGEST_URL = "http://<YOUR_LAPTOP_IP>:8000/api/sensor/ingest"`.
 4. In the web interface, switch from **Demo Mode** to **Live Mode**.
 5. Live sensor readings will immediately stream into the dashboard with the **LIVE** badge.
 
+
+## Offline flexion reference pipeline
+
+See [SPARS9x replay and evaluation](docs/spars9x-replay.md) for installation, offline processing and model training, real dataset replay, and session analytics. The [ten-participant pilot](docs/flexion-pipeline.md) documents the original signal and sensor contract.

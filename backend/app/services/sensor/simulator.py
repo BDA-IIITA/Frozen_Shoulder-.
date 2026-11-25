@@ -42,7 +42,7 @@ class SensorSimulator:
 
         # 2. Arm sensor based on exercise type
         if self.exercise_key == "flexion":
-            # Forward sagittal elevation from ~8 deg to ~82 deg (typical adhesive capsulitis progression)
+            # Forward sagittal elevation from ~8 deg to ~82 deg
             min_deg, max_deg = 8.0, 82.0
             cur_deg = min_deg + (max_deg - min_deg) * motion_profile
             cur_rad = math.radians(cur_deg)
@@ -77,7 +77,7 @@ class SensorSimulator:
             cur_rad = math.radians(cur_deg)
             q_arm = self._euler_to_quaternion(0.0, cur_rad, 0.0)
 
-        return {
+        packet = {
             "timestamp": round(t, 4),
             "device_id": "esp32-shoulder-01",
             "source": "demo",
@@ -102,6 +102,16 @@ class SensorSimulator:
                 }
             }
         }
+
+        if self.exercise_key == "flexion":
+            # Synthetic gravity-inclusive wrist signal for exercising the software path.
+            speed = math.radians(max_deg - min_deg) * math.pi / self.cycle_duration
+            speed *= math.sin(2 * math.pi * phase)
+            packet["sensors"]["wrist"] = {
+                "accelerometer": dict(x=-9.81 * math.sin(cur_rad), y=0., z=9.81 * math.cos(cur_rad)),
+                "gyroscope": dict(x=0., y=speed, z=0.),
+            }
+        return packet
 
     @staticmethod
     def _euler_to_quaternion(roll: float, pitch: float, yaw: float) -> np.ndarray:

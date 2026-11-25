@@ -32,9 +32,9 @@ export const MetricCard: React.FC<MetricCardProps> = ({
   };
 
   return (
-    <div className="bg-white rounded-xl border border-slate-200/80 p-5 shadow-xs hover:shadow-sm transition-shadow">
+    <div className="rounded-xl border border-slate-200 bg-white p-4">
       <div className="flex items-center justify-between mb-3">
-        <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+        <span className="text-sm font-medium text-slate-600">
           {title}
         </span>
         <div className={`w-8 h-8 rounded-lg flex items-center justify-center border ${iconColors[variant]}`}>
@@ -54,7 +54,7 @@ export const MetricCard: React.FC<MetricCardProps> = ({
         )}
       </div>
 
-      <div className="mt-2.5 flex items-center text-xs text-slate-500 space-x-1.5">
+      {(change != null || changeLabel || subtitle) && <div className="mt-1.5 flex items-center gap-1.5 text-xs text-slate-600">
         {change !== undefined && change !== null && (
           <span
             className={`font-semibold ${
@@ -67,7 +67,7 @@ export const MetricCard: React.FC<MetricCardProps> = ({
         )}
         {changeLabel && <span>{changeLabel}</span>}
         {subtitle && !changeLabel && <span>{subtitle}</span>}
-      </div>
+      </div>}
     </div>
   );
 };

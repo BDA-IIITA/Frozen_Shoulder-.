@@ -38,7 +38,7 @@ def relative_quaternion(q_chest: np.ndarray, q_arm: np.ndarray) -> np.ndarray:
     """
     Calculates the relative orientation of the upper arm relative to the chest:
     q_rel = q_chest_inv * q_arm
-    where q_chest and q_arm are world-to-sensor quaternions [x, y, z, w].
+    where q_chest and q_arm are sensor-to-world orientation quaternions [x, y, z, w].
     """
     q_c = normalize_quaternion(q_chest)
     q_a = normalize_quaternion(q_arm)
