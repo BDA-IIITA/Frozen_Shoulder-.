@@ -122,7 +122,6 @@ shouldersense/
 │   ├── live-angle-validation.md        # Live angle validation notes
 │   └── personal-progress.md            # Personal baseline method
 ├── .env.example
-├── ShoulderSense_Canva_Prompt.txt       # Presentation outline prompt
 └── README.md
 ```
 
